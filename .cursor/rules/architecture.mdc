@@ -1,0 +1,49 @@
+---
+description: Permanent AgentReady stack, API, security, and hackathon engineering rules
+alwaysApply: true
+---
+
+# AgentReady architecture
+
+AgentReady is a full-stack application.
+
+## Stack
+
+- Frontend: Next.js + TypeScript.
+- Backend: Python + FastAPI.
+- Database: Supabase PostgreSQL.
+- Payment integration: Razorpay Test Mode.
+- AI orchestration: LangGraph.
+
+## Boundaries
+
+- Frontend and backend must communicate through explicit backend APIs.
+- The frontend must never contain secret API keys.
+- Razorpay secret credentials must exist only on the backend.
+- Supabase service-role credentials must never be exposed to the frontend.
+- Persistent business data must use Supabase as the source of truth.
+- Do not use hardcoded fake data where real backend/database data is expected.
+
+## Feature parity
+
+- Every major frontend feature must have a corresponding backend implementation.
+- Every backend feature that is user-facing must have a corresponding frontend flow where appropriate.
+- API request and response schemas must be explicit and consistent.
+- Changes must be tested across the frontend → backend → database flow.
+
+## Agents and money
+
+- AI agents must not directly perform unrestricted financial operations.
+- Financial actions must pass through explicit backend validation and guardrails.
+- Agent actions and important audit events should be logged.
+
+## Integrity
+
+- Never invent Razorpay API endpoints or parameters. Verify against official Razorpay documentation.
+- Never hardcode secrets or credentials.
+
+## Scope
+
+- Keep the architecture simple enough to be reliably completed within a 5-day hackathon.
+- Prefer small, testable modules over large files.
+- Do not introduce unnecessary technologies or services without a clear reason.
