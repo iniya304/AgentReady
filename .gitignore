@@ -131,6 +131,11 @@ ehthumbs.db
 playwright-report/
 test-results/
 
+# Local install caches
+.cache-local/
+.npm-cache/
+.pip-cache/
+
 # Misc
 *.tmp
 *.temp

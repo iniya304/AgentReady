@@ -1,45 +1,42 @@
 # AgentReady
 
-A full-stack hackathon project for preparing and shipping agent-ready workflows with a Next.js frontend, FastAPI backend, and Supabase as the source of truth.
+Full-stack hackathon project: Next.js frontend and FastAPI backend.
 
 ## Project Overview
 
-AgentReady is a web application that helps teams design, run, and review AI-assisted workflows with explicit APIs, auditable actions, and guarded financial operations. This repository currently contains project foundation only; application code will follow.
+AgentReady currently has frontend and backend foundations only. Database, payments, AI agents, and the dashboard are not implemented yet.
 
 ## Problem
 
-Teams building AI agents often mix frontend secrets, unvalidated payments, and ad-hoc data. That makes systems hard to trust, hard to test, and unsafe for real money movement.
+Placeholder — to be filled when product scope is finalized.
 
 ## Solution
 
-AgentReady keeps a clear split: the Next.js client talks only to FastAPI; FastAPI owns Razorpay, Supabase service credentials, validation, and audit logs. LangGraph orchestrates agents behind backend guardrails so financial actions never run unrestricted.
+Placeholder — to be filled when product scope is finalized.
 
 ## Architecture
 
 ```
-[ Next.js + TypeScript ]  -->  [ FastAPI APIs ]  -->  [ Supabase PostgreSQL ]
-                                      |
-                                      +--> Razorpay (test mode)
-                                      +--> LangGraph (agent orchestration)
+[ Next.js + TypeScript ]  -->  [ FastAPI APIs ]
 ```
 
-- Frontend never holds secret keys.
-- Persistent business data lives in Supabase.
-- Request/response contracts are explicit on both sides.
+The frontend talks to the backend over HTTP. CORS allows local Next.js (`http://localhost:3000`) to call the API.
 
 ## Technology Stack
 
-| Layer | Choice |
-| --- | --- |
-| Frontend | Next.js, TypeScript |
-| Backend | Python, FastAPI |
-| Database | Supabase PostgreSQL |
-| Payments | Razorpay (test mode) |
-| AI orchestration | LangGraph |
+| Layer | Choice | Status |
+| --- | --- | --- |
+| Frontend | Next.js, TypeScript, Tailwind CSS | Foundation |
+| Backend | Python, FastAPI | Foundation (`GET /health`) |
+| Database | Supabase PostgreSQL | Not implemented |
+| Payments | Razorpay (test mode) | Not implemented |
+| AI orchestration | LangGraph | Not implemented |
 
 ## Features
 
-Placeholder — product features will be listed here as they are implemented.
+- Frontend starter app (App Router)
+- Backend `GET /health` JSON endpoint
+- CORS for local frontend → backend calls
 
 ## Project Structure
 
@@ -47,52 +44,70 @@ Placeholder — product features will be listed here as they are implemented.
 AgentReady/
 ├── .cursor/rules/architecture.mdc
 ├── .gitignore
-└── README.md
+├── README.md
+├── backend/
+│   ├── .venv/                 # local virtualenv (gitignored)
+│   ├── app/
+│   │   ├── __init__.py
+│   │   └── main.py
+│   └── requirements.txt
+├── docs/
+├── frontend/
+│   ├── .env.example
+│   ├── app/
+│   ├── public/
+│   └── package.json
+└── tests/
 ```
-
-Frontend, backend, and related packages are not created yet.
 
 ## Local Development
 
-Not applicable until the application is scaffolded. Do not install frontend or backend dependencies until that work starts.
+### Backend
 
-Expected later flow (placeholder):
+From `backend/` (after the local venv exists and packages are installed):
 
-1. Configure environment variables from a documented example file.
-2. Run the FastAPI backend.
-3. Run the Next.js frontend.
-4. Point the frontend at backend APIs only.
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Health check: `http://127.0.0.1:8000/health`
+
+### Frontend
+
+From `frontend/` (after `npm install`):
+
+```powershell
+Copy-Item .env.example .env.local
+npm run dev
+```
+
+App: `http://localhost:3000`
+
+Do not install packages globally. Use `frontend/node_modules` and `backend/.venv` only.
 
 ## Environment Variables
 
-Secrets belong in ignored `.env` files, never in source control or the frontend bundle.
+`frontend/.env.example` documents `NEXT_PUBLIC_API_URL` (public backend URL, no secrets). Copy to `.env.local` for local use. `.env` files are gitignored.
 
-Typical categories (names TBD when apps exist):
-
-- Backend: Supabase URL, anon key (if used server-side), **service role key**, Razorpay **key secret**, database URLs.
-- Frontend: public backend base URL and public Razorpay **key id** only if required by official client checkout — never Razorpay secret or Supabase service role.
+No backend secrets are required for this foundation.
 
 ## Testing
 
-Placeholder. When code exists, tests should cover the frontend → backend → database path, not isolated mocks that hide contract drift.
+`tests/` is reserved. No test suite yet.
 
 ## Deployment
 
-Placeholder. Keep the stack small enough for a five-day hackathon. Prefer one frontend host, one backend host, and managed Supabase.
+Not configured.
 
 ## Security
 
 - No secret API keys in the frontend.
-- Razorpay secrets and Supabase service-role credentials stay on the backend.
-- Agents must not perform unrestricted financial operations; payments go through backend validation.
-- Log agent actions and important audit events.
-- Never invent Razorpay endpoints or parameters; verify official docs.
+- Do not commit `.env` files or `backend/.venv`.
 
 ## Roadmap
 
-1. Foundation (this step): ignore rules, README, Cursor architecture rules.
-2. Backend and frontend scaffolds with explicit APIs.
-3. Auth, core data model in Supabase, and UI flows.
-4. LangGraph agents with guardrails and audit logging.
-5. Razorpay test-mode payments with backend validation.
-6. End-to-end tests and hackathon demo polish.
+1. Frontend and backend foundations (current).
+2. Auth, Supabase, and core APIs.
+3. Dashboard UI.
+4. LangGraph agents with guardrails.
+5. Razorpay test-mode payments.
