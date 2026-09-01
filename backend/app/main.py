@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app.supabase_client import supabase
-
+from app.recovery_engine import analyze_payment
 
 app = FastAPI(title="AgentReady")
 
@@ -69,3 +69,38 @@ def create_payment(payment: PaymentCreate):
             detail="Unable to create payment",
         ) from exc
     
+@app.post("/payments/{payment_id}/analyze")
+def analyze_payment_recovery(payment_id: str):
+    try:
+        response = (
+            supabase
+            .table("payments")
+            .select("*")
+            .eq("id", payment_id)
+            .single()
+            .execute()
+        )
+
+        payment = response.data
+
+        if not payment:
+            raise HTTPException(
+                status_code=404,
+                detail="Payment not found",
+            )
+
+        analysis = analyze_payment(payment)
+
+        return {
+            "success": True,
+            "analysis": analysis,
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to analyze payment",
+        ) from exc
