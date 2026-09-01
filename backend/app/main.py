@@ -68,7 +68,8 @@ def create_payment(payment: PaymentCreate):
             status_code=500,
             detail="Unable to create payment",
         ) from exc
-    
+
+
 @app.post("/payments/{payment_id}/analyze")
 def analyze_payment_recovery(payment_id: str):
     try:
@@ -77,17 +78,16 @@ def analyze_payment_recovery(payment_id: str):
             .table("payments")
             .select("*")
             .eq("id", payment_id)
-            .single()
             .execute()
         )
 
-        payment = response.data
-
-        if not payment:
+        if not response.data:
             raise HTTPException(
                 status_code=404,
                 detail="Payment not found",
             )
+
+        payment = response.data[0]
 
         analysis = analyze_payment(payment)
 
@@ -100,7 +100,54 @@ def analyze_payment_recovery(payment_id: str):
         raise
 
     except Exception as exc:
+        print(f"Analysis error: {exc}")
+
         raise HTTPException(
             status_code=500,
             detail="Unable to analyze payment",
+        ) from exc
+
+
+@app.post("/payments/{payment_id}/recover")
+def recover_payment(payment_id: str):
+    try:
+        response = (
+            supabase
+            .table("payments")
+            .select("*")
+            .eq("id", payment_id)
+            .execute()
+        )
+
+        if not response.data:
+            raise HTTPException(
+                status_code=404,
+                detail="Payment not found",
+            )
+
+        payment = response.data[0]
+
+        analysis = analyze_payment(payment)
+
+        return {
+            "success": True,
+            "payment_id": payment_id,
+            "action": analysis["strategy"],
+            "priority": analysis["priority"],
+            "priority_score": analysis["priority_score"],
+            "message": (
+                f"Recovery action '{analysis['strategy']}' "
+                "is ready to execute."
+            ),
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        print(f"Recovery error: {exc}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to execute recovery action",
         ) from exc

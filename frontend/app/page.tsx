@@ -21,6 +21,17 @@ type Analysis = {
   reason: string;
   recommended_delay_hours: number;
   confidence: number;
+  priority?: string;
+  priority_score?: number;
+};
+
+type RecoveryResult = {
+  success: boolean;
+  payment_id: string;
+  action: string;
+  priority: string;
+  priority_score: number;
+  message: string;
 };
 
 const API_URL =
@@ -31,7 +42,10 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
+  const [recoveringId, setRecoveringId] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  const [recoveryResult, setRecoveryResult] =
+    useState<RecoveryResult | null>(null);
 
   useEffect(() => {
     async function loadPayments() {
@@ -64,6 +78,7 @@ export default function Home() {
     try {
       setAnalyzingId(paymentId);
       setError("");
+      setRecoveryResult(null);
 
       const response = await fetch(
         `${API_URL}/payments/${paymentId}/analyze`,
@@ -84,6 +99,33 @@ export default function Home() {
       setError("Unable to analyze this payment.");
     } finally {
       setAnalyzingId(null);
+    }
+  }
+
+  async function recoverPayment(paymentId: string) {
+    try {
+      setRecoveringId(paymentId);
+      setError("");
+
+      const response = await fetch(
+        `${API_URL}/payments/${paymentId}/recover`,
+        {
+          method: "POST",
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Recovery execution failed");
+      }
+
+      const data: RecoveryResult = await response.json();
+
+      setRecoveryResult(data);
+    } catch (err) {
+      console.error(err);
+      setError("Unable to execute recovery action.");
+    } finally {
+      setRecoveringId(null);
     }
   }
 
@@ -124,6 +166,86 @@ export default function Home() {
           <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-red-400">
             {error}
           </div>
+        )}
+
+        {/* Recovery Result */}
+        {recoveryResult && (
+          <section className="mb-8 rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-6">
+
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-sm font-medium uppercase tracking-wider text-emerald-400">
+                  Recovery Action Executed
+                </p>
+
+                <h2 className="mt-1 text-2xl font-semibold">
+                  Agent has selected a recovery path
+                </h2>
+              </div>
+
+              <button
+                onClick={() => setRecoveryResult(null)}
+                className="text-sm text-zinc-500 hover:text-white"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-5 md:grid-cols-4">
+
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
+                <p className="text-sm text-zinc-500">
+                  Action
+                </p>
+
+                <p className="mt-2 text-lg font-semibold text-emerald-400">
+                  {formatStrategy(recoveryResult.action)}
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
+                <p className="text-sm text-zinc-500">
+                  Priority
+                </p>
+
+                <p className="mt-2 text-lg font-semibold uppercase text-yellow-400">
+                  {recoveryResult.priority}
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
+                <p className="text-sm text-zinc-500">
+                  Priority Score
+                </p>
+
+                <p className="mt-2 text-lg font-semibold">
+                  {recoveryResult.priority_score}/100
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
+                <p className="text-sm text-zinc-500">
+                  Status
+                </p>
+
+                <p className="mt-2 text-lg font-semibold text-emerald-400">
+                  Ready
+                </p>
+              </div>
+
+            </div>
+
+            <div className="mt-5 rounded-xl border border-zinc-800 bg-zinc-900 p-5">
+              <p className="text-sm text-zinc-500">
+                Agent Message
+              </p>
+
+              <p className="mt-2 text-zinc-300">
+                {recoveryResult.message}
+              </p>
+            </div>
+
+          </section>
         )}
 
         {/* Overview Cards */}
@@ -175,7 +297,7 @@ export default function Home() {
 
         </section>
 
-        {/* Recovery Analysis */}
+        {/* Analysis */}
         {analysis && (
           <section className="mb-8 rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-6">
 
@@ -198,7 +320,7 @@ export default function Home() {
               </button>
             </div>
 
-            <div className="grid gap-5 md:grid-cols-3">
+            <div className="grid gap-5 md:grid-cols-4">
 
               <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
                 <p className="text-sm text-zinc-500">
@@ -222,13 +344,21 @@ export default function Home() {
 
               <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
                 <p className="text-sm text-zinc-500">
-                  Recommended Delay
+                  Priority
+                </p>
+
+                <p className="mt-2 text-xl font-semibold uppercase text-yellow-400">
+                  {analysis.priority || "Pending"}
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
+                <p className="text-sm text-zinc-500">
+                  Priority Score
                 </p>
 
                 <p className="mt-2 text-xl font-semibold">
-                  {analysis.recommended_delay_hours === 0
-                    ? "Immediate"
-                    : `${analysis.recommended_delay_hours} hours`}
+                  {analysis.priority_score ?? "—"}/100
                 </p>
               </div>
 
@@ -327,15 +457,29 @@ export default function Home() {
                       </td>
 
                       <td className="px-6 py-5">
-                        <button
-                          className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-400 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                          onClick={() => analyzePayment(payment.id)}
-                          disabled={analyzingId === payment.id}
-                        >
-                          {analyzingId === payment.id
-                            ? "Analyzing..."
-                            : "Recover"}
-                        </button>
+                        <div className="flex gap-2">
+
+                          <button
+                            className="rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            onClick={() => analyzePayment(payment.id)}
+                            disabled={analyzingId === payment.id}
+                          >
+                            {analyzingId === payment.id
+                              ? "Analyzing..."
+                              : "Analyze"}
+                          </button>
+
+                          <button
+                            className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-400 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                            onClick={() => recoverPayment(payment.id)}
+                            disabled={recoveringId === payment.id}
+                          >
+                            {recoveringId === payment.id
+                              ? "Executing..."
+                              : "Recover"}
+                          </button>
+
+                        </div>
                       </td>
 
                     </tr>
