@@ -1,7 +1,12 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+from app.supabase_client import supabase
+
 
 app = FastAPI(title="AgentReady")
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -15,6 +20,14 @@ app.add_middleware(
 )
 
 
+class PaymentCreate(BaseModel):
+    customer_id: str = Field(min_length=1)
+    amount: float = Field(gt=0)
+    currency: str = "INR"
+    payment_status: str = "failed"
+    failure_reason: str | None = None
+
+
 @app.get("/health")
 def health() -> dict[str, str | bool]:
     return {
@@ -23,3 +36,36 @@ def health() -> dict[str, str | bool]:
         "message": "AgentReady backend is running",
         "running": True,
     }
+
+
+@app.get("/payments")
+def get_payments():
+    response = supabase.table("payments").select("*").execute()
+
+    return {
+        "success": True,
+        "payments": response.data,
+    }
+
+
+@app.post("/payments")
+def create_payment(payment: PaymentCreate):
+    try:
+        response = (
+            supabase
+            .table("payments")
+            .insert(payment.model_dump())
+            .execute()
+        )
+
+        return {
+            "success": True,
+            "payment": response.data[0],
+        }
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create payment",
+        ) from exc
+    
