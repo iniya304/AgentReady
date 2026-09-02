@@ -1,0 +1,23 @@
+{
+    "selected_model": "Logistic Regression",
+    "target": "recovered",
+    "test_size": 0.2,
+    "random_state": 42,
+    "features": [
+        "amount",
+        "failure_reason",
+        "payment_method",
+        "customer_success_rate",
+        "previous_attempts",
+        "hours_since_failure",
+        "intervention"
+    ],
+    "metrics": {
+        "model": "Logistic Regression",
+        "accuracy": 0.6145,
+        "precision": 0.5690515806988353,
+        "recall": 0.40046838407494145,
+        "f1": 0.47010309278350515,
+        "roc_auc": 0.6482889267628775
+    }
+}
