@@ -5,8 +5,13 @@ from pydantic import BaseModel, Field
 from app.supabase_client import supabase
 from app.recovery_engine import analyze_payment
 
+
 app = FastAPI(title="AgentReady")
 
+
+# ---------------------------------------------------------
+# CORS
+# ---------------------------------------------------------
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,6 +25,10 @@ app.add_middleware(
 )
 
 
+# ---------------------------------------------------------
+# Models
+# ---------------------------------------------------------
+
 class PaymentCreate(BaseModel):
     customer_id: str = Field(min_length=1)
     amount: float = Field(gt=0)
@@ -27,6 +36,10 @@ class PaymentCreate(BaseModel):
     payment_status: str = "failed"
     failure_reason: str | None = None
 
+
+# ---------------------------------------------------------
+# Health Check
+# ---------------------------------------------------------
 
 @app.get("/health")
 def health() -> dict[str, str | bool]:
@@ -38,15 +51,40 @@ def health() -> dict[str, str | bool]:
     }
 
 
+# ---------------------------------------------------------
+# Get Payments
+# ---------------------------------------------------------
+
 @app.get("/payments")
 def get_payments():
-    response = supabase.table("payments").select("*").execute()
+    try:
+        response = (
+            supabase
+            .table("payments")
+            .select("*")
+            .execute()
+        )
 
-    return {
-        "success": True,
-        "payments": response.data,
-    }
+        return {
+            "success": True,
+            "payments": response.data,
+        }
 
+    except Exception as exc:
+        print("========== GET PAYMENTS ERROR ==========")
+        print("ERROR TYPE:", type(exc).__name__)
+        print("ERROR:", repr(exc))
+        print("========================================")
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(exc),
+        ) from exc
+
+
+# ---------------------------------------------------------
+# Create Payment
+# ---------------------------------------------------------
 
 @app.post("/payments")
 def create_payment(payment: PaymentCreate):
@@ -64,32 +102,60 @@ def create_payment(payment: PaymentCreate):
         }
 
     except Exception as exc:
+        print("========== PAYMENT CREATION ERROR ==========")
+        print("ERROR TYPE:", type(exc).__name__)
+        print("ERROR:", repr(exc))
+        print("============================================")
+
         raise HTTPException(
             status_code=500,
-            detail="Unable to create payment",
+            detail=str(exc),
         ) from exc
 
+
+# ---------------------------------------------------------
+# Analyze Payment
+# ---------------------------------------------------------
 
 @app.post("/payments/{payment_id}/analyze")
 def analyze_payment_recovery(payment_id: str):
     try:
+        print("========== ANALYZE PAYMENT ==========")
+        print("REQUEST ID:", repr(payment_id))
+
         response = (
             supabase
             .table("payments")
             .select("*")
-            .eq("id", payment_id)
             .execute()
         )
 
-        if not response.data:
+        payments = response.data
+
+        print("PAYMENTS FOUND:", len(payments))
+
+        payment = next(
+            (
+                item
+                for item in payments
+                if str(item.get("id", "")).strip()
+                == str(payment_id).strip()
+            ),
+            None,
+        )
+
+        print("MATCHED PAYMENT:", payment)
+
+        if not payment:
             raise HTTPException(
                 status_code=404,
                 detail="Payment not found",
             )
 
-        payment = response.data[0]
-
         analysis = analyze_payment(payment)
+
+        print("ANALYSIS:", analysis)
+        print("====================================")
 
         return {
             "success": True,
@@ -100,41 +166,106 @@ def analyze_payment_recovery(payment_id: str):
         raise
 
     except Exception as exc:
-        print(f"Analysis error: {exc}")
+        print("========== ANALYSIS ERROR ==========")
+        print("ERROR TYPE:", type(exc).__name__)
+        print("ERROR:", repr(exc))
+        print("====================================")
 
         raise HTTPException(
             status_code=500,
-            detail="Unable to analyze payment",
+            detail=str(exc),
         ) from exc
 
+
+# ---------------------------------------------------------
+# Recover Payment
+# ---------------------------------------------------------
 
 @app.post("/payments/{payment_id}/recover")
 def recover_payment(payment_id: str):
     try:
+        print("========== RECOVER PAYMENT ==========")
+        print("REQUEST ID:", repr(payment_id))
+
+        # 1. Fetch payments
         response = (
             supabase
             .table("payments")
             .select("*")
-            .eq("id", payment_id)
             .execute()
         )
 
-        if not response.data:
+        payments = response.data
+
+        print("PAYMENTS FOUND:", len(payments))
+
+        # 2. Find requested payment
+        payment = next(
+            (
+                item
+                for item in payments
+                if str(item.get("id", "")).strip()
+                == str(payment_id).strip()
+            ),
+            None,
+        )
+
+        print("MATCHED PAYMENT:", payment)
+
+        if not payment:
             raise HTTPException(
                 status_code=404,
                 detail="Payment not found",
             )
 
-        payment = response.data[0]
-
+        # 3. Analyze payment
         analysis = analyze_payment(payment)
 
+        print("ANALYSIS:", analysis)
+
+        # 4. Save recovery action
+        recovery_data = {
+            "payment_id": payment["id"],
+            "strategy": analysis["strategy"],
+            "priority": analysis["priority"],
+            "priority_score": analysis["priority_score"],
+            "status": "recommended",
+        }
+
+        print("RECOVERY DATA:", recovery_data)
+
+        recovery_response = (
+            supabase
+            .table("recovery_actions")
+            .insert(recovery_data)
+            .execute()
+        )
+
+        print(
+            "RECOVERY ACTION RESPONSE:",
+            recovery_response.data
+        )
+
+        if not recovery_response.data:
+            raise HTTPException(
+                status_code=500,
+                detail="Recovery action was not saved",
+            )
+
+        saved_action = recovery_response.data[0]
+
+        print("SAVED ACTION:", saved_action)
+        print("====================================")
+
+        # 5. Return result
         return {
             "success": True,
-            "payment_id": payment_id,
+            "payment_id": payment["id"],
             "action": analysis["strategy"],
             "priority": analysis["priority"],
             "priority_score": analysis["priority_score"],
+            "recovery_action_id": saved_action["id"],
+            "status": saved_action["status"],
             "message": (
                 f"Recovery action '{analysis['strategy']}' "
                 "is ready to execute."
@@ -145,9 +276,44 @@ def recover_payment(payment_id: str):
         raise
 
     except Exception as exc:
-        print(f"Recovery error: {exc}")
+        print("========== RECOVERY ERROR ==========")
+        print("ERROR TYPE:", type(exc).__name__)
+        print("ERROR:", repr(exc))
+        print("====================================")
 
         raise HTTPException(
             status_code=500,
-            detail="Unable to execute recovery action",
+            detail=str(exc),
+        ) from exc
+
+
+# ---------------------------------------------------------
+# Recovery Action History
+# ---------------------------------------------------------
+
+@app.get("/recovery-actions")
+def get_recovery_actions():
+    try:
+        response = (
+            supabase
+            .table("recovery_actions")
+            .select("*")
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+        return {
+            "success": True,
+            "recovery_actions": response.data,
+        }
+
+    except Exception as exc:
+        print("========== RECOVERY HISTORY ERROR ==========")
+        print("ERROR TYPE:", type(exc).__name__)
+        print("ERROR:", repr(exc))
+        print("=============================================")
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(exc),
         ) from exc

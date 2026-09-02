@@ -2,83 +2,123 @@
 
 import { useEffect, useState } from "react";
 
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+
 type Payment = {
   id: string;
   customer_id: string;
   amount: number;
   currency: string;
   payment_status: string;
-  failure_reason: string;
-  created_at: string;
+  failure_reason: string | null;
 };
 
 type Analysis = {
   payment_id: string;
   customer_id: string;
   amount: number;
-  failure_reason: string;
+  failure_reason: string | null;
   strategy: string;
   reason: string;
   recommended_delay_hours: number;
   confidence: number;
-  priority?: string;
-  priority_score?: number;
-};
-
-type RecoveryResult = {
-  success: boolean;
-  payment_id: string;
-  action: string;
   priority: string;
   priority_score: number;
-  message: string;
 };
 
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+type RecoveryAction = {
+  id: string;
+  payment_id: string;
+  strategy: string;
+  priority: string;
+  priority_score: number;
+  status: string;
+  created_at: string;
+};
 
 export default function Home() {
   const [payments, setPayments] = useState<Payment[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [analyzingId, setAnalyzingId] = useState<string | null>(null);
-  const [recoveringId, setRecoveringId] = useState<string | null>(null);
+  const [recoveryActions, setRecoveryActions] = useState<
+    RecoveryAction[]
+  >([]);
+
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
-  const [recoveryResult, setRecoveryResult] =
-    useState<RecoveryResult | null>(null);
+
+  const [loadingPayments, setLoadingPayments] = useState(true);
+  const [loadingHistory, setLoadingHistory] = useState(true);
+  const [loadingAction, setLoadingAction] = useState<string | null>(null);
+
+  const [error, setError] = useState<string | null>(null);
+
+  // ---------------------------------------------------------
+  // LOAD PAYMENTS
+  // ---------------------------------------------------------
+
+  async function loadPayments() {
+    try {
+      setLoadingPayments(true);
+
+      const response = await fetch(`${API_URL}/payments`);
+
+      if (!response.ok) {
+        throw new Error("Unable to load payments");
+      }
+
+      const data = await response.json();
+
+      setPayments(data.payments || []);
+    } catch (err) {
+      console.error(err);
+      setError("Unable to load payments.");
+    } finally {
+      setLoadingPayments(false);
+    }
+  }
+
+  // ---------------------------------------------------------
+  // LOAD RECOVERY HISTORY
+  // ---------------------------------------------------------
+
+  async function loadRecoveryHistory() {
+    try {
+      setLoadingHistory(true);
+
+      const response = await fetch(
+        `${API_URL}/recovery-actions`
+      );
+
+      if (!response.ok) {
+        throw new Error("Unable to load recovery history");
+      }
+
+      const data = await response.json();
+
+      setRecoveryActions(data.recovery_actions || []);
+    } catch (err) {
+      console.error(err);
+      setError("Unable to load recovery history.");
+    } finally {
+      setLoadingHistory(false);
+    }
+  }
+
+  // ---------------------------------------------------------
+  // INITIAL LOAD
+  // ---------------------------------------------------------
 
   useEffect(() => {
-    async function loadPayments() {
-      try {
-        const response = await fetch(`${API_URL}/payments`);
-
-        if (!response.ok) {
-          throw new Error("Failed to fetch payments");
-        }
-
-        const data = await response.json();
-        setPayments(data.payments || []);
-      } catch (err) {
-        console.error(err);
-        setError("Unable to connect to AgentReady backend.");
-      } finally {
-        setLoading(false);
-      }
-    }
-
     loadPayments();
+    loadRecoveryHistory();
   }, []);
 
-  const totalValue = payments.reduce(
-    (sum, payment) => sum + payment.amount,
-    0
-  );
+  // ---------------------------------------------------------
+  // ANALYZE PAYMENT
+  // ---------------------------------------------------------
 
-  async function analyzePayment(paymentId: string) {
+  async function handleAnalyze(paymentId: string) {
     try {
-      setAnalyzingId(paymentId);
-      setError("");
-      setRecoveryResult(null);
+      setError(null);
 
       const response = await fetch(
         `${API_URL}/payments/${paymentId}/analyze`,
@@ -88,7 +128,7 @@ export default function Home() {
       );
 
       if (!response.ok) {
-        throw new Error("Recovery analysis failed");
+        throw new Error("Unable to analyze payment");
       }
 
       const data = await response.json();
@@ -96,16 +136,18 @@ export default function Home() {
       setAnalysis(data.analysis);
     } catch (err) {
       console.error(err);
-      setError("Unable to analyze this payment.");
-    } finally {
-      setAnalyzingId(null);
+      setError("Unable to analyze payment.");
     }
   }
 
-  async function recoverPayment(paymentId: string) {
+  // ---------------------------------------------------------
+  // RECOVER PAYMENT
+  // ---------------------------------------------------------
+
+  async function handleRecover(paymentId: string) {
     try {
-      setRecoveringId(paymentId);
-      setError("");
+      setError(null);
+      setLoadingAction(paymentId);
 
       const response = await fetch(
         `${API_URL}/payments/${paymentId}/recover`,
@@ -115,388 +157,1272 @@ export default function Home() {
       );
 
       if (!response.ok) {
-        throw new Error("Recovery execution failed");
+        throw new Error("Unable to create recovery action");
       }
 
-      const data: RecoveryResult = await response.json();
+      const data = await response.json();
 
-      setRecoveryResult(data);
+      setAnalysis({
+        payment_id: data.payment_id,
+        customer_id: "",
+        amount: 0,
+        failure_reason: null,
+        strategy: data.action,
+        reason: data.message,
+        recommended_delay_hours: 0,
+        confidence: 0,
+        priority: data.priority,
+        priority_score: data.priority_score,
+      });
+
+      await loadRecoveryHistory();
     } catch (err) {
       console.error(err);
-      setError("Unable to execute recovery action.");
+      setError("Unable to create recovery action.");
     } finally {
-      setRecoveringId(null);
+      setLoadingAction(null);
     }
   }
 
-  function formatStrategy(strategy: string) {
-    return strategy
-      .replaceAll("_", " ")
-      .replace(/\b\w/g, (letter) => letter.toUpperCase());
-  }
+  // ---------------------------------------------------------
+  // DASHBOARD METRICS
+  // ---------------------------------------------------------
+
+  const totalFailedPayments = payments.length;
+
+  const totalAtRisk = payments.reduce(
+    (total, payment) => total + Number(payment.amount),
+    0
+  );
+
+  const highPriorityActions = recoveryActions.filter(
+    (action) =>
+      action.priority.toLowerCase() === "high"
+  ).length;
 
   return (
-    <main className="min-h-screen bg-[#09090b] px-6 py-10 text-white">
-      <div className="mx-auto max-w-6xl">
+    <main className="dashboard">
+      <div className="container">
 
-        {/* Header */}
-        <header className="mb-10 flex items-center justify-between">
+        {/* =====================================================
+            HEADER
+        ===================================================== */}
+
+        <header className="header">
+
           <div>
-            <p className="mb-2 text-sm font-medium uppercase tracking-widest text-emerald-400">
-              Payment Recovery Infrastructure
-            </p>
+            <div className="brand">
+              <div className="brandIcon">A</div>
 
-            <h1 className="text-4xl font-bold tracking-tight">
-              AgentReady
-            </h1>
+              <div>
+                <h1>AgentReady</h1>
 
-            <p className="mt-2 text-zinc-400">
-              AI-powered payment recovery intelligence.
-            </p>
+                <p>
+                  AI-powered revenue recovery orchestration
+                </p>
+              </div>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-400">
-            <span className="h-2 w-2 rounded-full bg-emerald-400" />
+          <div className="systemStatus">
+            <span className="statusDot"></span>
             System Online
           </div>
+
         </header>
 
-        {/* Error */}
+
+        {/* =====================================================
+            ERROR
+        ===================================================== */}
+
         {error && (
-          <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-red-400">
-            {error}
+          <div className="errorBox">
+            <strong>Something went wrong</strong>
+            <span>{error}</span>
           </div>
         )}
 
-        {/* Recovery Result */}
-        {recoveryResult && (
-          <section className="mb-8 rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-6">
 
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-sm font-medium uppercase tracking-wider text-emerald-400">
-                  Recovery Action Executed
-                </p>
+        {/* =====================================================
+            METRICS
+        ===================================================== */}
 
-                <h2 className="mt-1 text-2xl font-semibold">
-                  Agent has selected a recovery path
-                </h2>
-              </div>
+        <section className="metricsGrid">
 
-              <button
-                onClick={() => setRecoveryResult(null)}
-                className="text-sm text-zinc-500 hover:text-white"
-              >
-                Close
-              </button>
-            </div>
+          <MetricCard
+            title="Failed Payments"
+            value={totalFailedPayments.toString()}
+            subtitle="Payments requiring attention"
+            icon="!"
+          />
 
-            <div className="mt-5 grid gap-5 md:grid-cols-4">
+          <MetricCard
+            title="Revenue at Risk"
+            value={`₹${totalAtRisk.toLocaleString(
+              "en-IN"
+            )}`}
+            subtitle="Total failed transaction value"
+            icon="₹"
+          />
 
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-                <p className="text-sm text-zinc-500">
-                  Action
-                </p>
+          <MetricCard
+            title="Recovery Actions"
+            value={recoveryActions.length.toString()}
+            subtitle="AI recommendations generated"
+            icon="↗"
+          />
 
-                <p className="mt-2 text-lg font-semibold text-emerald-400">
-                  {formatStrategy(recoveryResult.action)}
-                </p>
-              </div>
-
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-                <p className="text-sm text-zinc-500">
-                  Priority
-                </p>
-
-                <p className="mt-2 text-lg font-semibold uppercase text-yellow-400">
-                  {recoveryResult.priority}
-                </p>
-              </div>
-
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-                <p className="text-sm text-zinc-500">
-                  Priority Score
-                </p>
-
-                <p className="mt-2 text-lg font-semibold">
-                  {recoveryResult.priority_score}/100
-                </p>
-              </div>
-
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-                <p className="text-sm text-zinc-500">
-                  Status
-                </p>
-
-                <p className="mt-2 text-lg font-semibold text-emerald-400">
-                  Ready
-                </p>
-              </div>
-
-            </div>
-
-            <div className="mt-5 rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-              <p className="text-sm text-zinc-500">
-                Agent Message
-              </p>
-
-              <p className="mt-2 text-zinc-300">
-                {recoveryResult.message}
-              </p>
-            </div>
-
-          </section>
-        )}
-
-        {/* Overview Cards */}
-        <section className="mb-8 grid gap-5 md:grid-cols-3">
-
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-6">
-            <p className="text-sm text-zinc-400">
-              Failed Payments
-            </p>
-
-            <p className="mt-3 text-3xl font-bold">
-              {loading ? "—" : payments.length}
-            </p>
-
-            <p className="mt-2 text-sm text-zinc-500">
-              Payments requiring recovery
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-6">
-            <p className="text-sm text-zinc-400">
-              Recovery Value
-            </p>
-
-            <p className="mt-3 text-3xl font-bold">
-              {loading
-                ? "—"
-                : `₹${totalValue.toLocaleString("en-IN")}`}
-            </p>
-
-            <p className="mt-2 text-sm text-zinc-500">
-              Total failed transaction value
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-6">
-            <p className="text-sm text-zinc-400">
-              Agent Status
-            </p>
-
-            <p className="mt-3 text-3xl font-bold text-emerald-400">
-              Ready
-            </p>
-
-            <p className="mt-2 text-sm text-zinc-500">
-              Recovery engine available
-            </p>
-          </div>
+          <MetricCard
+            title="High Priority"
+            value={highPriorityActions.toString()}
+            subtitle="Requires priority handling"
+            icon="⚡"
+          />
 
         </section>
 
-        {/* Analysis */}
+
+        {/* =====================================================
+            AI ANALYSIS
+        ===================================================== */}
+
         {analysis && (
-          <section className="mb-8 rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-6">
+          <section className="analysisCard">
 
-            <div className="mb-5 flex items-center justify-between">
+            <div className="sectionHeader">
+
               <div>
-                <p className="text-sm uppercase tracking-wider text-emerald-400">
-                  Agent Recommendation
-                </p>
+                <span className="eyebrow">
+                  AI DECISION ENGINE
+                </span>
 
-                <h2 className="mt-1 text-2xl font-semibold">
-                  Recovery Strategy
-                </h2>
-              </div>
+                <h2>Recovery Analysis</h2>
 
-              <button
-                onClick={() => setAnalysis(null)}
-                className="text-sm text-zinc-500 hover:text-white"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="grid gap-5 md:grid-cols-4">
-
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-                <p className="text-sm text-zinc-500">
-                  Recommended Action
-                </p>
-
-                <p className="mt-2 text-xl font-semibold text-emerald-400">
-                  {formatStrategy(analysis.strategy)}
+                <p>
+                  AgentReady analyzed this failed payment
+                  and selected a recovery strategy.
                 </p>
               </div>
 
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-                <p className="text-sm text-zinc-500">
-                  Confidence
-                </p>
-
-                <p className="mt-2 text-xl font-semibold">
-                  {(analysis.confidence * 100).toFixed(0)}%
-                </p>
-              </div>
-
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-                <p className="text-sm text-zinc-500">
-                  Priority
-                </p>
-
-                <p className="mt-2 text-xl font-semibold uppercase text-yellow-400">
-                  {analysis.priority || "Pending"}
-                </p>
-              </div>
-
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-                <p className="text-sm text-zinc-500">
-                  Priority Score
-                </p>
-
-                <p className="mt-2 text-xl font-semibold">
-                  {analysis.priority_score ?? "—"}/100
-                </p>
+              <div className="decisionBadge">
+                AI Decision
               </div>
 
             </div>
 
-            <div className="mt-5 rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-              <p className="text-sm text-zinc-500">
-                Agent Reasoning
-              </p>
 
-              <p className="mt-2 text-zinc-300">
-                {analysis.reason}
-              </p>
+            <div className="analysisGrid">
+
+              <InfoBox
+                label="Recommended Strategy"
+                value={formatStrategy(
+                  analysis.strategy
+                )}
+              />
+
+              <InfoBox
+                label="Priority"
+                value={analysis.priority.toUpperCase()}
+                highlight={
+                  analysis.priority.toLowerCase() ===
+                  "high"
+                }
+              />
+
+              <InfoBox
+                label="Priority Score"
+                value={`${analysis.priority_score}/100`}
+              />
+
+              {analysis.confidence > 0 && (
+                <InfoBox
+                  label="AI Confidence"
+                  value={`${Math.round(
+                    analysis.confidence * 100
+                  )}%`}
+                />
+              )}
+
+            </div>
+
+
+            <div className="reasonBox">
+
+              <div className="reasonIcon">
+                AI
+              </div>
+
+              <div>
+                <strong>Why this action?</strong>
+
+                <p>
+                  {analysis.reason}
+                </p>
+              </div>
+
             </div>
 
           </section>
         )}
 
-        {/* Payments Table */}
-        <section className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/70">
 
-          <div className="border-b border-zinc-800 px-6 py-5">
-            <h2 className="text-xl font-semibold">
-              Failed Payments
-            </h2>
+        {/* =====================================================
+            FAILED PAYMENTS
+        ===================================================== */}
 
-            <p className="mt-1 text-sm text-zinc-500">
-              Transactions detected by AgentReady
-            </p>
+        <section className="card">
+
+          <div className="sectionHeader">
+
+            <div>
+              <span className="eyebrow">
+                PAYMENT MONITORING
+              </span>
+
+              <h2>Failed Payments</h2>
+
+              <p>
+                Payments detected by AgentReady that may
+                require recovery intervention.
+              </p>
+            </div>
+
+            <div className="countBadge">
+              {payments.length} payments
+            </div>
+
           </div>
 
-          {loading ? (
-            <div className="p-10 text-center text-zinc-500">
-              Loading payment data...
+
+          {loadingPayments ? (
+            <div className="loading">
+              Loading payments...
             </div>
           ) : payments.length === 0 ? (
-            <div className="p-10 text-center text-zinc-500">
+            <div className="emptyState">
               No failed payments found.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left">
+            <div className="tableWrapper">
 
-                <thead className="border-b border-zinc-800 text-sm text-zinc-500">
+              <table>
+
+                <thead>
                   <tr>
-                    <th className="px-6 py-4 font-medium">
-                      Customer
-                    </th>
-
-                    <th className="px-6 py-4 font-medium">
-                      Amount
-                    </th>
-
-                    <th className="px-6 py-4 font-medium">
-                      Failure Reason
-                    </th>
-
-                    <th className="px-6 py-4 font-medium">
-                      Status
-                    </th>
-
-                    <th className="px-6 py-4 font-medium">
-                      Action
-                    </th>
+                    <th>Customer</th>
+                    <th>Amount</th>
+                    <th>Failure Reason</th>
+                    <th>Status</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
 
                 <tbody>
+
                   {payments.map((payment) => (
-                    <tr
-                      key={payment.id}
-                      className="border-b border-zinc-800/70 last:border-0 hover:bg-zinc-800/30"
-                    >
 
-                      <td className="px-6 py-5 font-medium">
-                        {payment.customer_id}
-                      </td>
+                    <tr key={payment.id}>
 
-                      <td className="px-6 py-5">
-                        ₹{payment.amount.toLocaleString("en-IN")}
-                      </td>
+                      <td>
+                        <div className="customerCell">
 
-                      <td className="px-6 py-5">
-                        <span className="rounded-md bg-red-500/10 px-3 py-1 text-sm capitalize text-red-400">
-                          {payment.failure_reason?.replaceAll(
-                            "_",
-                            " "
-                          ) || "Unknown"}
-                        </span>
-                      </td>
+                          <div className="customerAvatar">
+                            {payment.customer_id
+                              .replace("cust_", "")
+                              .charAt(0)
+                              .toUpperCase()}
+                          </div>
 
-                      <td className="px-6 py-5">
-                        <span className="text-yellow-400">
-                          ● Pending Recovery
-                        </span>
-                      </td>
+                          <div>
+                            <strong>
+                              {payment.customer_id}
+                            </strong>
 
-                      <td className="px-6 py-5">
-                        <div className="flex gap-2">
-
-                          <button
-                            className="rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
-                            onClick={() => analyzePayment(payment.id)}
-                            disabled={analyzingId === payment.id}
-                          >
-                            {analyzingId === payment.id
-                              ? "Analyzing..."
-                              : "Analyze"}
-                          </button>
-
-                          <button
-                            className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-400 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                            onClick={() => recoverPayment(payment.id)}
-                            disabled={recoveringId === payment.id}
-                          >
-                            {recoveringId === payment.id
-                              ? "Executing..."
-                              : "Recover"}
-                          </button>
+                            <small>
+                              Payment ID{" "}
+                              {payment.id.slice(0, 8)}...
+                            </small>
+                          </div>
 
                         </div>
                       </td>
 
+
+                      <td>
+                        <strong className="amount">
+                          ₹
+                          {Number(
+                            payment.amount
+                          ).toLocaleString("en-IN")}
+                        </strong>
+                      </td>
+
+
+                      <td>
+                        <span className="failureBadge">
+                          {formatStrategy(
+                            payment.failure_reason ||
+                              "unknown"
+                          )}
+                        </span>
+                      </td>
+
+
+                      <td>
+                        <span className="statusBadge">
+                          <span className="statusSmallDot"></span>
+                          {payment.payment_status}
+                        </span>
+                      </td>
+
+
+                      <td>
+
+                        <div className="actionButtons">
+
+                          <button
+                            className="analyzeButton"
+                            onClick={() =>
+                              handleAnalyze(
+                                payment.id
+                              )
+                            }
+                          >
+                            Analyze
+                          </button>
+
+                          <button
+                            className="recoverButton"
+                            onClick={() =>
+                              handleRecover(
+                                payment.id
+                              )
+                            }
+                            disabled={
+                              loadingAction ===
+                              payment.id
+                            }
+                          >
+                            {loadingAction ===
+                            payment.id
+                              ? "Saving..."
+                              : "Recover"}
+                          </button>
+
+                        </div>
+
+                      </td>
+
                     </tr>
+
                   ))}
+
                 </tbody>
 
               </table>
+
             </div>
           )}
+
         </section>
 
-        {/* Footer */}
-        <footer className="mt-8 text-center text-sm text-zinc-600">
-          AgentReady • Intelligent Payment Recovery
+
+        {/* =====================================================
+            RECOVERY HISTORY
+        ===================================================== */}
+
+        <section className="card">
+
+          <div className="sectionHeader">
+
+            <div>
+              <span className="eyebrow">
+                AGENT ACTIVITY
+              </span>
+
+              <h2>Recovery History</h2>
+
+              <p>
+                Recovery decisions persisted by the
+                AgentReady backend.
+              </p>
+            </div>
+
+            <button
+              className="refreshButton"
+              onClick={loadRecoveryHistory}
+            >
+              ↻ Refresh
+            </button>
+
+          </div>
+
+
+          {loadingHistory ? (
+            <div className="loading">
+              Loading recovery history...
+            </div>
+          ) : recoveryActions.length === 0 ? (
+            <div className="emptyState">
+              No recovery actions yet.
+            </div>
+          ) : (
+
+            <div className="tableWrapper">
+
+              <table>
+
+                <thead>
+                  <tr>
+                    <th>Payment</th>
+                    <th>Strategy</th>
+                    <th>Priority</th>
+                    <th>Score</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+
+                  {recoveryActions.map(
+                    (action) => (
+
+                      <tr key={action.id}>
+
+                        <td>
+
+                          <span className="paymentId">
+                            {action.payment_id.slice(
+                              0,
+                              12
+                            )}
+                            ...
+                          </span>
+
+                        </td>
+
+
+                        <td>
+
+                          <strong>
+                            {formatStrategy(
+                              action.strategy
+                            )}
+                          </strong>
+
+                        </td>
+
+
+                        <td>
+
+                          <span
+                            className={
+                              action.priority.toLowerCase() ===
+                              "high"
+                                ? "priorityHigh"
+                                : "priorityNormal"
+                            }
+                          >
+                            {action.priority.toUpperCase()}
+                          </span>
+
+                        </td>
+
+
+                        <td>
+
+                          <div className="score">
+
+                            <span>
+                              {action.priority_score}
+                            </span>
+
+                            <div className="scoreBar">
+                              <div
+                                className="scoreFill"
+                                style={{
+                                  width: `${Math.min(
+                                    action.priority_score,
+                                    100
+                                  )}%`,
+                                }}
+                              />
+                            </div>
+
+                          </div>
+
+                        </td>
+
+
+                        <td>
+
+                          <span className="recommendedBadge">
+                            <span className="statusSmallDot"></span>
+                            {formatStatus(
+                              action.status
+                            )}
+                          </span>
+
+                        </td>
+
+
+                        <td>
+
+                          <span className="createdAt">
+                            {new Date(
+                              action.created_at
+                            ).toLocaleString(
+                              "en-IN"
+                            )}
+                          </span>
+
+                        </td>
+
+                      </tr>
+
+                    )
+                  )}
+
+                </tbody>
+
+              </table>
+
+            </div>
+
+          )}
+
+        </section>
+
+
+        {/* =====================================================
+            FOOTER
+        ===================================================== */}
+
+        <footer>
+
+          <span>
+            AgentReady
+          </span>
+
+          <span>
+            AI Revenue Recovery System
+          </span>
+
         </footer>
 
       </div>
+
+
+      {/* =======================================================
+          STYLES
+      ======================================================= */}
+
+      <style jsx>{`
+
+        * {
+          box-sizing: border-box;
+        }
+
+        .dashboard {
+          min-height: 100vh;
+          background: #f4f7fb;
+          color: #172033;
+          padding: 38px 24px 60px;
+          font-family:
+            Arial,
+            Helvetica,
+            sans-serif;
+        }
+
+        .container {
+          max-width: 1240px;
+          margin: 0 auto;
+        }
+
+        /* HEADER */
+
+        .header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 34px;
+        }
+
+        .brand {
+          display: flex;
+          align-items: center;
+          gap: 14px;
+        }
+
+        .brandIcon {
+          width: 48px;
+          height: 48px;
+          border-radius: 12px;
+          background: #111827;
+          color: #ffffff;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 22px;
+          font-weight: 800;
+        }
+
+        .brand h1 {
+          margin: 0;
+          color: #111827;
+          font-size: 30px;
+          font-weight: 800;
+          letter-spacing: -0.8px;
+        }
+
+        .brand p {
+          margin: 5px 0 0;
+          color: #64748b;
+          font-size: 14px;
+        }
+
+        .systemStatus {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          background: #ffffff;
+          border: 1px solid #dbe2ea;
+          border-radius: 999px;
+          padding: 9px 14px;
+          color: #334155;
+          font-size: 13px;
+          font-weight: 600;
+        }
+
+        .statusDot {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: #16a34a;
+        }
+
+        /* ERROR */
+
+        .errorBox {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          background: #fff1f2;
+          border: 1px solid #fecdd3;
+          color: #9f1239;
+          padding: 14px 18px;
+          border-radius: 10px;
+          margin-bottom: 22px;
+          font-size: 14px;
+        }
+
+        /* METRICS */
+
+        .metricsGrid {
+          display: grid;
+          grid-template-columns:
+            repeat(4, 1fr);
+          gap: 18px;
+          margin-bottom: 24px;
+        }
+
+        .metricCard {
+          background: #ffffff;
+          border: 1px solid #dfe5ec;
+          border-radius: 14px;
+          padding: 22px;
+          box-shadow:
+            0 3px 12px rgba(15, 23, 42, 0.04);
+        }
+
+        .metricTop {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 18px;
+        }
+
+        .metricIcon {
+          width: 34px;
+          height: 34px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 9px;
+          background: #eef2ff;
+          color: #3730a3;
+          font-weight: 800;
+        }
+
+        .metricTitle {
+          color: #64748b;
+          font-size: 13px;
+          font-weight: 600;
+        }
+
+        .metricValue {
+          color: #111827;
+          font-size: 29px;
+          font-weight: 800;
+          letter-spacing: -0.7px;
+        }
+
+        .metricSubtitle {
+          color: #94a3b8;
+          font-size: 12px;
+          margin-top: 6px;
+        }
+
+        /* CARDS */
+
+        .card,
+        .analysisCard {
+          background: #ffffff;
+          border: 1px solid #dfe5ec;
+          border-radius: 14px;
+          padding: 26px;
+          margin-bottom: 24px;
+          box-shadow:
+            0 3px 12px rgba(15, 23, 42, 0.04);
+        }
+
+        .analysisCard {
+          border-left: 4px solid #4f46e5;
+        }
+
+        .sectionHeader {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 20px;
+          margin-bottom: 22px;
+        }
+
+        .eyebrow {
+          display: block;
+          color: #4f46e5;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 1.2px;
+          margin-bottom: 7px;
+        }
+
+        .sectionHeader h2 {
+          margin: 0;
+          color: #111827;
+          font-size: 21px;
+          font-weight: 750;
+        }
+
+        .sectionHeader p {
+          margin: 6px 0 0;
+          color: #64748b;
+          font-size: 13px;
+          line-height: 1.5;
+        }
+
+        .decisionBadge {
+          background: #eef2ff;
+          color: #4338ca;
+          border: 1px solid #c7d2fe;
+          padding: 8px 12px;
+          border-radius: 8px;
+          font-size: 12px;
+          font-weight: 700;
+        }
+
+        .countBadge {
+          background: #f1f5f9;
+          color: #475569;
+          padding: 8px 12px;
+          border-radius: 8px;
+          font-size: 12px;
+          font-weight: 700;
+        }
+
+        /* ANALYSIS */
+
+        .analysisGrid {
+          display: grid;
+          grid-template-columns:
+            repeat(4, 1fr);
+          gap: 14px;
+        }
+
+        .infoBox {
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          border-radius: 10px;
+          padding: 16px;
+        }
+
+        .infoLabel {
+          color: #64748b;
+          font-size: 11px;
+          font-weight: 700;
+          margin-bottom: 8px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+
+        .infoValue {
+          color: #111827;
+          font-size: 16px;
+          font-weight: 750;
+        }
+
+        .infoValue.highlight {
+          color: #dc2626;
+        }
+
+        .reasonBox {
+          display: flex;
+          gap: 13px;
+          align-items: flex-start;
+          margin-top: 16px;
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          border-radius: 10px;
+          padding: 16px;
+        }
+
+        .reasonIcon {
+          width: 34px;
+          height: 34px;
+          min-width: 34px;
+          border-radius: 8px;
+          background: #111827;
+          color: #ffffff;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 10px;
+          font-weight: 800;
+        }
+
+        .reasonBox strong {
+          color: #111827;
+          font-size: 13px;
+        }
+
+        .reasonBox p {
+          color: #475569;
+          margin: 5px 0 0;
+          font-size: 13px;
+          line-height: 1.5;
+        }
+
+        /* TABLE */
+
+        .tableWrapper {
+          overflow-x: auto;
+        }
+
+        table {
+          width: 100%;
+          border-collapse: collapse;
+        }
+
+        th {
+          text-align: left;
+          padding: 13px 12px;
+          color: #64748b;
+          background: #f8fafc;
+          border-bottom: 1px solid #e2e8f0;
+          font-size: 11px;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: 0.4px;
+        }
+
+        td {
+          padding: 15px 12px;
+          color: #334155;
+          border-bottom: 1px solid #edf1f5;
+          font-size: 13px;
+          vertical-align: middle;
+        }
+
+        tbody tr:hover {
+          background: #fafbfc;
+        }
+
+        tbody tr:last-child td {
+          border-bottom: none;
+        }
+
+        /* CUSTOMER */
+
+        .customerCell {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .customerAvatar {
+          width: 34px;
+          height: 34px;
+          border-radius: 9px;
+          background: #eef2ff;
+          color: #4338ca;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .customerCell strong {
+          display: block;
+          color: #1e293b;
+          font-size: 13px;
+        }
+
+        .customerCell small {
+          display: block;
+          color: #94a3b8;
+          font-size: 10px;
+          margin-top: 3px;
+        }
+
+        .amount {
+          color: #111827;
+          font-size: 14px;
+        }
+
+        .failureBadge {
+          display: inline-block;
+          background: #fff7ed;
+          color: #c2410c;
+          border: 1px solid #fed7aa;
+          padding: 5px 8px;
+          border-radius: 6px;
+          font-size: 11px;
+          font-weight: 700;
+        }
+
+        .statusBadge {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          background: #fef2f2;
+          color: #b91c1c;
+          padding: 5px 8px;
+          border-radius: 6px;
+          font-size: 11px;
+          font-weight: 700;
+        }
+
+        .statusSmallDot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: #ef4444;
+        }
+
+        /* BUTTONS */
+
+        .actionButtons {
+          display: flex;
+          gap: 7px;
+        }
+
+        .analyzeButton,
+        .recoverButton,
+        .refreshButton {
+          border-radius: 7px;
+          padding: 8px 12px;
+          font-size: 11px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: 0.15s ease;
+        }
+
+        .analyzeButton {
+          background: #ffffff;
+          border: 1px solid #cbd5e1;
+          color: #334155;
+        }
+
+        .analyzeButton:hover {
+          background: #f8fafc;
+          border-color: #94a3b8;
+        }
+
+        .recoverButton {
+          background: #111827;
+          border: 1px solid #111827;
+          color: #ffffff;
+        }
+
+        .recoverButton:hover {
+          background: #374151;
+        }
+
+        .recoverButton:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
+        }
+
+        .refreshButton {
+          background: #ffffff;
+          border: 1px solid #cbd5e1;
+          color: #334155;
+        }
+
+        .refreshButton:hover {
+          background: #f8fafc;
+        }
+
+        /* RECOVERY HISTORY */
+
+        .paymentId {
+          color: #64748b;
+          font-family: monospace;
+          font-size: 11px;
+        }
+
+        .priorityHigh {
+          color: #dc2626;
+          background: #fef2f2;
+          border: 1px solid #fecaca;
+          padding: 5px 8px;
+          border-radius: 6px;
+          font-size: 10px;
+          font-weight: 800;
+        }
+
+        .priorityNormal {
+          color: #475569;
+          background: #f1f5f9;
+          padding: 5px 8px;
+          border-radius: 6px;
+          font-size: 10px;
+          font-weight: 800;
+        }
+
+        .score {
+          display: flex;
+          align-items: center;
+          gap: 9px;
+        }
+
+        .score > span {
+          min-width: 24px;
+          color: #111827;
+          font-weight: 800;
+        }
+
+        .scoreBar {
+          width: 55px;
+          height: 5px;
+          background: #e2e8f0;
+          border-radius: 99px;
+          overflow: hidden;
+        }
+
+        .scoreFill {
+          height: 100%;
+          background: #4f46e5;
+          border-radius: 99px;
+        }
+
+        .recommendedBadge {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          background: #ecfdf5;
+          color: #047857;
+          border: 1px solid #a7f3d0;
+          padding: 5px 8px;
+          border-radius: 6px;
+          font-size: 10px;
+          font-weight: 800;
+        }
+
+        .recommendedBadge .statusSmallDot {
+          background: #10b981;
+        }
+
+        .createdAt {
+          color: #64748b;
+          font-size: 11px;
+        }
+
+        /* STATES */
+
+        .loading,
+        .emptyState {
+          padding: 35px;
+          text-align: center;
+          color: #64748b;
+          font-size: 13px;
+        }
+
+        /* FOOTER */
+
+        footer {
+          display: flex;
+          justify-content: space-between;
+          color: #94a3b8;
+          font-size: 11px;
+          padding: 10px 4px;
+        }
+
+        /* RESPONSIVE */
+
+        @media (max-width: 900px) {
+
+          .metricsGrid {
+            grid-template-columns:
+              repeat(2, 1fr);
+          }
+
+          .analysisGrid {
+            grid-template-columns:
+              repeat(2, 1fr);
+          }
+
+        }
+
+        @media (max-width: 600px) {
+
+          .dashboard {
+            padding: 22px 14px;
+          }
+
+          .header {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 16px;
+          }
+
+          .metricsGrid {
+            grid-template-columns: 1fr;
+          }
+
+          .analysisGrid {
+            grid-template-columns: 1fr;
+          }
+
+          .sectionHeader {
+            flex-direction: column;
+          }
+
+          .actionButtons {
+            flex-direction: column;
+          }
+
+          footer {
+            flex-direction: column;
+            gap: 6px;
+          }
+
+        }
+
+      `}</style>
     </main>
   );
+}
+
+
+// =========================================================
+// COMPONENTS
+// =========================================================
+
+function MetricCard({
+  title,
+  value,
+  subtitle,
+  icon,
+}: {
+  title: string;
+  value: string;
+  subtitle: string;
+  icon: string;
+}) {
+  return (
+    <div className="metricCard">
+
+      <div className="metricTop">
+
+        <span className="metricTitle">
+          {title}
+        </span>
+
+        <div className="metricIcon">
+          {icon}
+        </div>
+
+      </div>
+
+      <div className="metricValue">
+        {value}
+      </div>
+
+      <div className="metricSubtitle">
+        {subtitle}
+      </div>
+
+    </div>
+  );
+}
+
+
+function InfoBox({
+  label,
+  value,
+  highlight = false,
+}: {
+  label: string;
+  value: string;
+  highlight?: boolean;
+}) {
+  return (
+    <div className="infoBox">
+
+      <div className="infoLabel">
+        {label}
+      </div>
+
+      <div
+        className={`infoValue ${
+          highlight ? "highlight" : ""
+        }`}
+      >
+        {value}
+      </div>
+
+    </div>
+  );
+}
+
+
+// =========================================================
+// HELPERS
+// =========================================================
+
+function formatStrategy(strategy: string) {
+  return strategy
+    .split("_")
+    .map(
+      (word) =>
+        word.charAt(0).toUpperCase() +
+        word.slice(1)
+    )
+    .join(" ");
+}
+
+
+function formatStatus(status: string) {
+  return status
+    .split("_")
+    .map(
+      (word) =>
+        word.charAt(0).toUpperCase() +
+        word.slice(1)
+    )
+    .join(" ");
 }
