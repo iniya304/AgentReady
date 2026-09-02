@@ -1,0 +1,5 @@
+intervention,count,mean
+request_alternative_payment,2513,0.45921209709510546
+request_card_update,2553,0.42616529573051315
+retry_later,2462,0.41673436230706745
+retry_now,2472,0.4045307443365696

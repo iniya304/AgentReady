@@ -1,0 +1,5 @@
+failure_reason,count,mean
+network_error,2069,0.5693571773803769
+insufficient_funds,3497,0.44981412639405205
+card_declined,2935,0.3621805792163543
+expired_card,1499,0.3028685790527018
