@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field
 
 from app.supabase_client import supabase
 from app.recovery_engine import analyze_payment
+from ml.recovery_context import get_payment_context
+from ml.prediction_service import predict_recovery
 
 
 app = FastAPI(title="AgentReady")
@@ -35,6 +37,11 @@ class PaymentCreate(BaseModel):
     currency: str = "INR"
     payment_status: str = "failed"
     failure_reason: str | None = None
+    payment_method: str = "card"
+
+
+class PredictionRequest(BaseModel):
+    intervention: str = "retry_later"
 
 
 # ---------------------------------------------------------
@@ -174,6 +181,64 @@ def analyze_payment_recovery(payment_id: str):
         raise HTTPException(
             status_code=500,
             detail=str(exc),
+        ) from exc
+
+
+# ---------------------------------------------------------
+# ML Recovery Prediction
+# ---------------------------------------------------------
+
+@app.post("/payments/{payment_id}/predict")
+def predict_payment_recovery(
+    payment_id: str,
+    request: PredictionRequest,
+):
+    try:
+        print("========== ML RECOVERY PREDICTION ==========")
+        print("PAYMENT ID:", repr(payment_id))
+        print("INTERVENTION:", request.intervention)
+
+        # 1. Fetch payment + customer profile
+        context = get_payment_context(
+            payment_id=payment_id,
+            intervention=request.intervention,
+        )
+
+        print("ML CONTEXT CREATED")
+        print("CUSTOMER:", context.get("customer_id"))
+        print("AMOUNT:", context.get("amount"))
+        print("FAILURE:", context.get("failure_reason"))
+
+        # 2. Run trained ML model
+        prediction = predict_recovery(context)
+
+        print("ML PREDICTION:", prediction)
+        print("============================================")
+
+        return {
+            "success": True,
+            "payment_id": payment_id,
+            "intervention": request.intervention,
+            "prediction": prediction,
+        }
+
+    except ValueError as exc:
+        print("ML CONTEXT ERROR:", repr(exc))
+
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        print("========== ML PREDICTION ERROR ==========")
+        print("ERROR TYPE:", type(exc).__name__)
+        print("ERROR:", repr(exc))
+        print("=========================================")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to generate recovery prediction",
         ) from exc
 
 
