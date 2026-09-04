@@ -2,10 +2,21 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+
 from app.supabase_client import supabase
 from app.recovery_engine import analyze_payment
+
+
 from ml.recovery_context import get_payment_context
 from ml.prediction_service import predict_recovery
+from ml.intervention_optimizer import optimize_intervention
+from ml.policy_engine import evaluate_policy
+from ml.recovery_workflow import get_next_intervention
+from ml.recovery_attempt_service import (
+    get_recovery_attempts,
+    create_recovery_attempt,
+    update_recovery_attempt,
+)
 
 
 app = FastAPI(title="AgentReady")
@@ -42,6 +53,11 @@ class PaymentCreate(BaseModel):
 
 class PredictionRequest(BaseModel):
     intervention: str = "retry_later"
+
+
+class RecoveryAttemptUpdate(BaseModel):
+    status: str
+    failure_reason: str | None = None
 
 
 # ---------------------------------------------------------
@@ -243,6 +259,70 @@ def predict_payment_recovery(
 
 
 # ---------------------------------------------------------
+# Intervention Optimizer + Policy Engine
+# ---------------------------------------------------------
+
+@app.post("/payments/{payment_id}/optimize")
+def optimize_payment_recovery(payment_id: str):
+    try:
+        print("========== OPTIMIZE RECOVERY ==========")
+        print("PAYMENT ID:", repr(payment_id))
+
+        # 1. Fetch payment + customer recovery profile
+        #    and construct ML context.
+        context = get_payment_context(
+            payment_id=payment_id,
+            intervention="retry_later",
+        )
+
+        print("PAYMENT CONTEXT CREATED")
+        print("CUSTOMER:", context.get("customer_id"))
+        print("AMOUNT:", context.get("amount"))
+        print("FAILURE:", context.get("failure_reason"))
+
+        # 2. Evaluate all supported interventions.
+        optimization = optimize_intervention(context)
+
+        print("OPTIMIZATION RESULT:", optimization)
+
+        # 3. Apply safety/business guardrails.
+        policy = evaluate_policy(
+            payment_context=context,
+            optimization=optimization,
+        )
+
+        print("POLICY RESULT:", policy)
+        print("======================================")
+
+        # 4. Return optimizer + policy decision.
+        return {
+            "success": True,
+            "payment_id": payment_id,
+            "optimization": optimization,
+            "policy": policy,
+        }
+
+    except ValueError as exc:
+        print("OPTIMIZATION CONTEXT ERROR:", repr(exc))
+
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        print("========== OPTIMIZATION ERROR ==========")
+        print("ERROR TYPE:", type(exc).__name__)
+        print("ERROR:", repr(exc))
+        print("=========================================")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to optimize recovery intervention",
+        ) from exc
+
+
+# ---------------------------------------------------------
 # Recover Payment
 # ---------------------------------------------------------
 
@@ -308,7 +388,7 @@ def recover_payment(payment_id: str):
 
         print(
             "RECOVERY ACTION RESPONSE:",
-            recovery_response.data
+            recovery_response.data,
         )
 
         if not recovery_response.data:
@@ -353,6 +433,138 @@ def recover_payment(payment_id: str):
 
 
 # ---------------------------------------------------------
+# Recovery Workflow
+# ---------------------------------------------------------
+
+@app.post("/payments/{payment_id}/recovery-workflow")
+def start_recovery_workflow(payment_id: str):
+    try:
+        print("========== RECOVERY WORKFLOW ==========")
+        print("PAYMENT ID:", repr(payment_id))
+
+        # 1. Fetch previous recovery attempts
+        previous_attempts = get_recovery_attempts(payment_id)
+
+        print("PREVIOUS ATTEMPTS:", previous_attempts)
+
+        # 2. Apply stopping rules
+        workflow = get_next_intervention(previous_attempts)
+
+        print("WORKFLOW DECISION:", workflow)
+
+        # 3. If workflow is not continuing,
+        #    do not create a duplicate attempt.
+        if workflow["decision"] != "CONTINUE":
+
+            existing_attempt = None
+
+            # If an attempt is already pending,
+            # return that existing attempt.
+            if workflow["decision"] == "PENDING":
+
+                pending_attempts = [
+                    attempt
+                    for attempt in previous_attempts
+                    if attempt.get("status") == "pending"
+                ]
+
+                if pending_attempts:
+                    existing_attempt = pending_attempts[-1]
+
+            print("WORKFLOW STOPPED")
+            print("EXISTING ATTEMPT:", existing_attempt)
+            print("======================================")
+
+            return {
+                "success": True,
+                "payment_id": payment_id,
+                "workflow": workflow,
+                "attempt": existing_attempt,
+            }
+
+        # 4. Create next recovery attempt
+        attempt = create_recovery_attempt(
+            payment_id=payment_id,
+            attempt_number=workflow["attempt_number"],
+            intervention=workflow["next_intervention"],
+        )
+
+        print("CREATED ATTEMPT:", attempt)
+        print("======================================")
+
+        return {
+            "success": True,
+            "payment_id": payment_id,
+            "workflow": workflow,
+            "attempt": attempt,
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        print("========== RECOVERY WORKFLOW ERROR ==========")
+        print("ERROR TYPE:", type(exc).__name__)
+        print("ERROR:", repr(exc))
+        print("==============================================")
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(exc),
+        ) from exc
+
+
+# ---------------------------------------------------------
+# Complete Recovery Attempt
+# ---------------------------------------------------------
+
+@app.patch("/recovery-attempts/{attempt_id}")
+def complete_recovery_attempt(
+    attempt_id: str,
+    request: RecoveryAttemptUpdate,
+):
+    try:
+        print("========== COMPLETE RECOVERY ATTEMPT ==========")
+        print("ATTEMPT ID:", repr(attempt_id))
+        print("STATUS:", request.status)
+
+        # Update the attempt in Supabase
+        updated_attempt = update_recovery_attempt(
+            attempt_id=attempt_id,
+            status=request.status,
+            failure_reason=request.failure_reason,
+        )
+
+        print("UPDATED ATTEMPT:", updated_attempt)
+        print("===============================================")
+
+        return {
+            "success": True,
+            "attempt": updated_attempt,
+            "message": "Recovery attempt completed successfully",
+        }
+
+    except ValueError as exc:
+        print("INVALID ATTEMPT STATUS:", repr(exc))
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        print("========== COMPLETE ATTEMPT ERROR ==========")
+        print("ERROR TYPE:", type(exc).__name__)
+        print("ERROR:", repr(exc))
+        print("============================================")
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(exc),
+        ) from exc
+
+
+# ---------------------------------------------------------
 # Recovery Action History
 # ---------------------------------------------------------
 
@@ -382,3 +594,7 @@ def get_recovery_actions():
             status_code=500,
             detail=str(exc),
         ) from exc
+
+
+
+        
