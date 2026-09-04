@@ -367,7 +367,58 @@ def recover_payment(payment_id: str):
 
         print("ANALYSIS:", analysis)
 
-        # 4. Save recovery action
+        # -------------------------------------------------
+        # 4. Idempotency / Duplicate Prevention
+        # -------------------------------------------------
+        #
+        # Before creating a new recovery recommendation,
+        # check whether an active "recommended" action
+        # already exists for this payment.
+        #
+        # This prevents repeated Recover clicks from
+        # creating duplicate recovery_actions rows.
+        # -------------------------------------------------
+
+        existing_response = (
+            supabase
+            .table("recovery_actions")
+            .select("*")
+            .eq("payment_id", payment["id"])
+            .eq("status", "recommended")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+        existing_actions = existing_response.data or []
+
+        if existing_actions:
+            existing_action = existing_actions[0]
+
+            print("EXISTING RECOVERY ACTION FOUND:")
+            print(existing_action)
+            print("NO DUPLICATE ACTION CREATED")
+            print("====================================")
+
+            return {
+                "success": True,
+                "payment_id": payment["id"],
+                "action": existing_action["strategy"],
+                "priority": existing_action["priority"],
+                "priority_score": existing_action["priority_score"],
+                "recovery_action_id": existing_action["id"],
+                "status": existing_action["status"],
+                "already_exists": True,
+                "message": (
+                    f"Recovery action '{existing_action['strategy']}' "
+                    "already exists and is ready to execute."
+                ),
+            }
+
+        # -------------------------------------------------
+        # 5. Create new recovery action
+        # -------------------------------------------------
+
         recovery_data = {
             "payment_id": payment["id"],
             "strategy": analysis["strategy"],
@@ -376,7 +427,8 @@ def recover_payment(payment_id: str):
             "status": "recommended",
         }
 
-        print("RECOVERY DATA:", recovery_data)
+        print("CREATING NEW RECOVERY DATA:")
+        print(recovery_data)
 
         recovery_response = (
             supabase
@@ -401,7 +453,7 @@ def recover_payment(payment_id: str):
         print("SAVED ACTION:", saved_action)
         print("====================================")
 
-        # 5. Return result
+        # 6. Return newly created result
         return {
             "success": True,
             "payment_id": payment["id"],
@@ -410,6 +462,7 @@ def recover_payment(payment_id: str):
             "priority_score": analysis["priority_score"],
             "recovery_action_id": saved_action["id"],
             "status": saved_action["status"],
+            "already_exists": False,
             "message": (
                 f"Recovery action '{analysis['strategy']}' "
                 "is ready to execute."
@@ -697,4 +750,4 @@ def get_recovery_actions():
             detail=str(exc),
         ) from exc
 
-    
+        
