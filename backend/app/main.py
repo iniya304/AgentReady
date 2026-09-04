@@ -2,10 +2,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-
 from app.supabase_client import supabase
 from app.recovery_engine import analyze_payment
-
 
 from ml.recovery_context import get_payment_context
 from ml.prediction_service import predict_recovery
@@ -17,6 +15,7 @@ from ml.recovery_attempt_service import (
     create_recovery_attempt,
     update_recovery_attempt,
 )
+from ml.batch_recovery_service import analyze_batch_recovery
 
 
 app = FastAPI(title="AgentReady")
@@ -565,6 +564,109 @@ def complete_recovery_attempt(
 
 
 # ---------------------------------------------------------
+# Recovery Attempt History
+# ---------------------------------------------------------
+
+@app.get("/payments/{payment_id}/recovery-attempts")
+def get_payment_recovery_attempts(payment_id: str):
+    try:
+        print("========== RECOVERY ATTEMPT HISTORY ==========")
+        print("PAYMENT ID:", repr(payment_id))
+
+        attempts = get_recovery_attempts(payment_id)
+
+        print("ATTEMPT COUNT:", len(attempts))
+        print("===============================================")
+
+        return {
+            "success": True,
+            "payment_id": payment_id,
+            "attempt_count": len(attempts),
+            "attempts": attempts,
+        }
+
+    except Exception as exc:
+        print("========== RECOVERY ATTEMPT HISTORY ERROR ==========")
+        print("ERROR TYPE:", type(exc).__name__)
+        print("ERROR:", repr(exc))
+        print("=====================================================")
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(exc),
+        ) from exc
+
+
+# ---------------------------------------------------------
+# Batch Recovery Intelligence
+# ---------------------------------------------------------
+
+@app.post("/recovery/batch")
+def run_batch_recovery():
+    """
+    Analyze the complete failed-payment portfolio.
+
+    The batch agent:
+    - scans failed payments
+    - predicts recovery probability
+    - evaluates candidate interventions
+    - calculates expected recovery value
+    - applies financial guardrails
+    - separates automatic recovery from human review
+    """
+
+    try:
+        print("========== BATCH RECOVERY ==========")
+
+        result = analyze_batch_recovery()
+
+        print("PAYMENT COUNT:", result["payment_count"])
+
+        print(
+            "REVENUE AT RISK:",
+            result["total_revenue_at_risk"],
+        )
+
+        print(
+            "EXPECTED RECOVERY:",
+            result["total_expected_recovery"],
+        )
+
+        print(
+            "RECOVERY OPPORTUNITY:",
+            result["recovery_opportunity_percent"],
+        )
+
+        print(
+            "AUTO RECOVERY COUNT:",
+            result["auto_recovery_count"],
+        )
+
+        print(
+            "HUMAN REVIEW COUNT:",
+            result["human_review_count"],
+        )
+
+        print("====================================")
+
+        return {
+            "success": True,
+            "data": result,
+        }
+
+    except Exception as exc:
+        print("========== BATCH RECOVERY ERROR ==========")
+        print("ERROR TYPE:", type(exc).__name__)
+        print("ERROR:", repr(exc))
+        print("==========================================")
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(exc),
+        ) from exc
+
+
+# ---------------------------------------------------------
 # Recovery Action History
 # ---------------------------------------------------------
 
@@ -595,6 +697,4 @@ def get_recovery_actions():
             detail=str(exc),
         ) from exc
 
-
-
-        
+    
