@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from app.supabase_client import supabase
@@ -62,21 +63,54 @@ def get_payment_context(
 
     if created_at:
         try:
-            payment_hour = int(
-                created_at[11:13]
-            )
+            payment_hour = int(created_at[11:13])
         except (ValueError, TypeError):
             payment_hour = 12
     else:
         payment_hour = 12
 
     # ---------------------------------------------------------
-    # 4. Build ML context
+    # 4. Calculate hours since payment failure
+    # ---------------------------------------------------------
+
+    # Default fallback keeps the ML pipeline safe if the timestamp
+    # is missing or cannot be parsed.
+    hours_since_failure = 24
+
+    if created_at:
+        try:
+            failure_time = datetime.fromisoformat(
+                created_at.replace("Z", "+00:00")
+            )
+
+            if failure_time.tzinfo is None:
+                failure_time = failure_time.replace(
+                    tzinfo=timezone.utc
+                )
+
+            hours_since_failure = max(
+                0,
+                int(
+                    (
+                        datetime.now(timezone.utc)
+                        - failure_time
+                    ).total_seconds()
+                    / 3600
+                ),
+            )
+
+        except (ValueError, TypeError):
+            hours_since_failure = 24
+
+    # ---------------------------------------------------------
+    # 5. Build ML context
     # ---------------------------------------------------------
 
     context = {
         "amount": float(payment["amount"]),
+
         "failure_reason": payment.get("failure_reason"),
+
         "payment_method": payment.get(
             "payment_method",
             "card",
@@ -114,7 +148,7 @@ def get_payment_context(
             profile["previous_attempts"]
         ),
 
-        "hours_since_failure": 24,
+        "hours_since_failure": hours_since_failure,
 
         "payment_hour": payment_hour,
 
@@ -136,4 +170,3 @@ def get_payment_context(
     }
 
     return context
-    
