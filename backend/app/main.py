@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -20,13 +22,15 @@ from ml.audit_service import log_audit_event, get_audit_events
 from ml.evaluation_service import get_model_evaluation
 from ml.recovery_agent import answer_recovery_question
 
+from razorpay_recovery_service import create_recovery_payment_link
+
 
 app = FastAPI(title="AgentReady")
 
 
-# ---------------------------------------------------------
+# =========================================================
 # CORS
-# ---------------------------------------------------------
+# =========================================================
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,9 +44,9 @@ app.add_middleware(
 )
 
 
-# ---------------------------------------------------------
-# Models
-# ---------------------------------------------------------
+# =========================================================
+# REQUEST MODELS
+# =========================================================
 
 class PaymentCreate(BaseModel):
     customer_id: str = Field(min_length=1)
@@ -66,9 +70,13 @@ class RecoveryAttemptUpdate(BaseModel):
     failure_reason: str | None = None
 
 
-# ---------------------------------------------------------
-# Health Check
-# ---------------------------------------------------------
+class RecoveryExecutionRequest(BaseModel):
+    recovery_action_id: str = Field(min_length=1)
+
+
+# =========================================================
+# HEALTH CHECK
+# =========================================================
 
 @app.get("/health")
 def health() -> dict[str, str | bool]:
@@ -80,9 +88,9 @@ def health() -> dict[str, str | bool]:
     }
 
 
-# ---------------------------------------------------------
-# Get Payments
-# ---------------------------------------------------------
+# =========================================================
+# GET PAYMENTS
+# =========================================================
 
 @app.get("/payments")
 def get_payments():
@@ -111,9 +119,9 @@ def get_payments():
         ) from exc
 
 
-# ---------------------------------------------------------
-# Create Payment
-# ---------------------------------------------------------
+# =========================================================
+# CREATE PAYMENT
+# =========================================================
 
 @app.post("/payments")
 def create_payment(payment: PaymentCreate):
@@ -142,9 +150,9 @@ def create_payment(payment: PaymentCreate):
         ) from exc
 
 
-# ---------------------------------------------------------
-# Analyze Payment
-# ---------------------------------------------------------
+# =========================================================
+# ANALYZE PAYMENT
+# =========================================================
 
 @app.post("/payments/{payment_id}/analyze")
 def analyze_payment_recovery(payment_id: str):
@@ -185,10 +193,6 @@ def analyze_payment_recovery(payment_id: str):
 
         print("ANALYSIS:", analysis)
 
-        # -------------------------------------------------
-        # Audit AI analysis decision
-        # -------------------------------------------------
-
         log_audit_event(
             event_type="payment_analysis",
             payment_id=payment_id,
@@ -227,9 +231,9 @@ def analyze_payment_recovery(payment_id: str):
         ) from exc
 
 
-# ---------------------------------------------------------
-# ML Recovery Prediction
-# ---------------------------------------------------------
+# =========================================================
+# ML RECOVERY PREDICTION
+# =========================================================
 
 @app.post("/payments/{payment_id}/predict")
 def predict_payment_recovery(
@@ -241,7 +245,6 @@ def predict_payment_recovery(
         print("PAYMENT ID:", repr(payment_id))
         print("INTERVENTION:", request.intervention)
 
-        # 1. Fetch payment + customer profile
         context = get_payment_context(
             payment_id=payment_id,
             intervention=request.intervention,
@@ -252,14 +255,9 @@ def predict_payment_recovery(
         print("AMOUNT:", context.get("amount"))
         print("FAILURE:", context.get("failure_reason"))
 
-        # 2. Run trained ML model
         prediction = predict_recovery(context)
 
         print("ML PREDICTION:", prediction)
-
-        # -------------------------------------------------
-        # Audit ML prediction
-        # -------------------------------------------------
 
         log_audit_event(
             event_type="ml_recovery_prediction",
@@ -304,9 +302,9 @@ def predict_payment_recovery(
         ) from exc
 
 
-# ---------------------------------------------------------
-# Intervention Optimizer + Policy Engine
-# ---------------------------------------------------------
+# =========================================================
+# INTERVENTION OPTIMIZER + POLICY ENGINE
+# =========================================================
 
 @app.post("/payments/{payment_id}/optimize")
 def optimize_payment_recovery(payment_id: str):
@@ -314,8 +312,6 @@ def optimize_payment_recovery(payment_id: str):
         print("========== OPTIMIZE RECOVERY ==========")
         print("PAYMENT ID:", repr(payment_id))
 
-        # 1. Fetch payment + customer recovery profile
-        #    and construct ML context.
         context = get_payment_context(
             payment_id=payment_id,
             intervention="retry_later",
@@ -326,22 +322,16 @@ def optimize_payment_recovery(payment_id: str):
         print("AMOUNT:", context.get("amount"))
         print("FAILURE:", context.get("failure_reason"))
 
-        # 2. Evaluate all supported interventions.
         optimization = optimize_intervention(context)
 
         print("OPTIMIZATION RESULT:", optimization)
 
-        # 3. Apply safety/business guardrails.
         policy = evaluate_policy(
             payment_context=context,
             optimization=optimization,
         )
 
         print("POLICY RESULT:", policy)
-
-        # -------------------------------------------------
-        # Audit optimization + policy decision
-        # -------------------------------------------------
 
         selected_intervention = None
 
@@ -382,7 +372,6 @@ def optimize_payment_recovery(payment_id: str):
 
         print("======================================")
 
-        # 4. Return optimizer + policy decision.
         return {
             "success": True,
             "payment_id": payment_id,
@@ -410,9 +399,9 @@ def optimize_payment_recovery(payment_id: str):
         ) from exc
 
 
-# ---------------------------------------------------------
-# Recover Payment
-# ---------------------------------------------------------
+# =========================================================
+# RECOVER PAYMENT
+# =========================================================
 
 @app.post("/payments/{payment_id}/recover")
 def recover_payment(payment_id: str):
@@ -420,7 +409,6 @@ def recover_payment(payment_id: str):
         print("========== RECOVER PAYMENT ==========")
         print("REQUEST ID:", repr(payment_id))
 
-        # 1. Fetch payments
         response = (
             supabase
             .table("payments")
@@ -432,7 +420,6 @@ def recover_payment(payment_id: str):
 
         print("PAYMENTS FOUND:", len(payments))
 
-        # 2. Find requested payment
         payment = next(
             (
                 item
@@ -451,14 +438,9 @@ def recover_payment(payment_id: str):
                 detail="Payment not found",
             )
 
-        # 3. Analyze payment
         analysis = analyze_payment(payment)
 
         print("ANALYSIS:", analysis)
-
-        # -------------------------------------------------
-        # 4. Idempotency / Duplicate Prevention
-        # -------------------------------------------------
 
         existing_response = (
             supabase
@@ -479,10 +461,6 @@ def recover_payment(payment_id: str):
             print("EXISTING RECOVERY ACTION FOUND:")
             print(existing_action)
             print("NO DUPLICATE ACTION CREATED")
-
-            # -------------------------------------------------
-            # Audit duplicate-safe recovery recommendation
-            # -------------------------------------------------
 
             log_audit_event(
                 event_type="recovery_recommendation_reused",
@@ -519,10 +497,6 @@ def recover_payment(payment_id: str):
                 ),
             }
 
-        # -------------------------------------------------
-        # 5. Create new recovery action
-        # -------------------------------------------------
-
         recovery_data = {
             "payment_id": payment["id"],
             "strategy": analysis["strategy"],
@@ -556,10 +530,6 @@ def recover_payment(payment_id: str):
 
         print("SAVED ACTION:", saved_action)
 
-        # -------------------------------------------------
-        # Audit new recovery recommendation
-        # -------------------------------------------------
-
         log_audit_event(
             event_type="recovery_recommendation_created",
             payment_id=payment["id"],
@@ -578,7 +548,6 @@ def recover_payment(payment_id: str):
 
         print("====================================")
 
-        # 6. Return newly created result
         return {
             "success": True,
             "payment_id": payment["id"],
@@ -609,18 +578,41 @@ def recover_payment(payment_id: str):
         ) from exc
 
 
-# ---------------------------------------------------------
-# Recovery Workflow
-# ---------------------------------------------------------
+# =========================================================
+# EXECUTE GOVERNED RAZORPAY RECOVERY
+# =========================================================
 
-@app.post("/payments/{payment_id}/recovery-workflow")
-def start_recovery_workflow(payment_id: str):
+@app.post("/payments/{payment_id}/recovery-actions/execute")
+def execute_recovery_action(
+    payment_id: str,
+    request: RecoveryExecutionRequest,
+):
+    """
+    Execute a governed recovery action through Razorpay Test Mode.
+
+    Governance:
+    - Payment must exist.
+    - Recovery action must belong to the payment.
+    - Existing provider executions are reused.
+    - Successful previous recovery stops execution.
+    - Pending attempts block duplicate execution.
+    - Maximum recovery attempts are enforced.
+    - Policy must allow AUTO_EXECUTE.
+    - Only request_alternative_payment has a Razorpay executor.
+
+    This endpoint operates only in Razorpay Test Mode.
+    """
+
     try:
-        print("========== RECOVERY WORKFLOW ==========")
+        print("========== EXECUTE RECOVERY ACTION ==========")
         print("PAYMENT ID:", repr(payment_id))
+        print(
+            "RECOVERY ACTION ID:",
+            repr(request.recovery_action_id),
+        )
 
         # -------------------------------------------------
-        # 1. Verify that the payment exists
+        # 1. Load payment
         # -------------------------------------------------
 
         payment_response = (
@@ -645,24 +637,566 @@ def start_recovery_workflow(payment_id: str):
         print("PAYMENT FOUND:", payment)
 
         # -------------------------------------------------
-        # 2. Fetch previous recovery attempts
+        # 2. Load recovery action
         # -------------------------------------------------
+
+        action_response = (
+            supabase
+            .table("recovery_actions")
+            .select("*")
+            .eq("id", request.recovery_action_id)
+            .eq("payment_id", payment_id)
+            .limit(1)
+            .execute()
+        )
+
+        actions = action_response.data or []
+
+        if not actions:
+            raise HTTPException(
+                status_code=404,
+                detail="Recovery action not found for this payment",
+            )
+
+        recovery_action = actions[0]
+
+        print("RECOVERY ACTION:", recovery_action)
+
+        # -------------------------------------------------
+        # 3. Action status validation
+        # -------------------------------------------------
+
+        if recovery_action.get("status") != "recommended":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        "Only recovery actions in recommended "
+                        "status can be executed."
+                    ),
+                    "current_status": recovery_action.get(
+                        "status"
+                    ),
+                },
+            )
+
+        # -------------------------------------------------
+        # 4. Idempotency check
+        # -------------------------------------------------
+
+        if recovery_action.get("provider_reference"):
+            print("EXISTING RAZORPAY EXECUTION FOUND")
+
+            return {
+                "success": True,
+                "payment_id": payment_id,
+                "recovery_action_id": recovery_action["id"],
+                "already_executed": True,
+                "provider": recovery_action.get("provider"),
+                "provider_reference": recovery_action.get(
+                    "provider_reference"
+                ),
+                "provider_url": recovery_action.get(
+                    "provider_url"
+                ),
+                "provider_status": recovery_action.get(
+                    "provider_status"
+                ),
+                "message": (
+                    "Existing Razorpay recovery action returned. "
+                    "No duplicate Payment Link was created."
+                ),
+            }
+
+        # -------------------------------------------------
+        # 5. Load previous recovery attempts
+        # -------------------------------------------------
+
+        previous_attempts = get_recovery_attempts(payment_id)
+
+        print(
+            "PREVIOUS RECOVERY ATTEMPTS:",
+            previous_attempts,
+        )
+
+        # -------------------------------------------------
+        # 6. Stop if already recovered
+        # -------------------------------------------------
+
+        successful_attempts = [
+            attempt
+            for attempt in previous_attempts
+            if attempt.get("status") == "success"
+        ]
+
+        if successful_attempts:
+            log_audit_event(
+                event_type="recovery_execution_blocked",
+                payment_id=payment_id,
+                intervention=recovery_action.get("strategy"),
+                status="blocked",
+                reason=(
+                    "Recovery execution stopped because a "
+                    "previous recovery attempt succeeded"
+                ),
+                metadata={
+                    "recovery_action_id": recovery_action["id"],
+                    "successful_attempt_count": len(
+                        successful_attempts
+                    ),
+                },
+            )
+
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Recovery execution stopped because "
+                    "this payment has already been recovered."
+                ),
+            )
+
+        # -------------------------------------------------
+        # 7. Stop if an attempt is already pending
+        # -------------------------------------------------
+
+        pending_attempts = [
+            attempt
+            for attempt in previous_attempts
+            if attempt.get("status") == "pending"
+        ]
+
+        if pending_attempts:
+            existing_attempt = pending_attempts[-1]
+
+            log_audit_event(
+                event_type="recovery_execution_blocked",
+                payment_id=payment_id,
+                intervention=recovery_action.get("strategy"),
+                status="blocked",
+                reason=(
+                    "Recovery execution stopped because "
+                    "another recovery attempt is already pending"
+                ),
+                metadata={
+                    "recovery_action_id": recovery_action["id"],
+                    "pending_attempt_id": existing_attempt.get(
+                        "id"
+                    ),
+                },
+            )
+
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        "A recovery attempt is already pending "
+                        "for this payment."
+                    ),
+                    "pending_attempt": existing_attempt,
+                },
+            )
+
+        # -------------------------------------------------
+        # 8. Enforce maximum recovery attempts
+        # -------------------------------------------------
+
+        completed_attempts = [
+            attempt
+            for attempt in previous_attempts
+            if attempt.get("status") in {
+                "success",
+                "failed",
+            }
+        ]
+
+        if len(completed_attempts) >= 2:
+            log_audit_event(
+                event_type="recovery_execution_blocked",
+                payment_id=payment_id,
+                intervention=recovery_action.get("strategy"),
+                status="blocked",
+                reason=(
+                    "Recovery execution stopped because "
+                    "maximum recovery attempts were reached"
+                ),
+                metadata={
+                    "recovery_action_id": recovery_action["id"],
+                    "attempt_count": len(completed_attempts),
+                    "max_attempts": 2,
+                },
+            )
+
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        "Maximum recovery attempts reached. "
+                        "Payment requires human review."
+                    ),
+                    "attempt_count": len(completed_attempts),
+                    "max_attempts": 2,
+                },
+            )
+
+        # -------------------------------------------------
+        # 9. Recompute current ML decision
+        # -------------------------------------------------
+
+        context = get_payment_context(
+            payment_id=payment_id,
+            intervention="retry_later",
+        )
+
+        print("RECOVERY CONTEXT CREATED")
+
+        optimization = optimize_intervention(context)
+
+        print(
+            "CURRENT OPTIMIZATION:",
+            optimization,
+        )
+
+        policy = evaluate_policy(
+            payment_context=context,
+            optimization=optimization,
+        )
+
+        print(
+            "CURRENT POLICY:",
+            policy,
+        )
+
+        recommended_intervention = (
+            optimization.get("recommended_intervention")
+        )
+
+        policy_decision = (
+            policy.get("decision")
+            or policy.get("action")
+            or policy.get("policy_decision")
+        )
+
+        print(
+            "RECOMMENDED INTERVENTION:",
+            recommended_intervention,
+        )
+
+        print(
+            "POLICY DECISION:",
+            policy_decision,
+        )
+
+        # -------------------------------------------------
+        # 10. Ensure stored action agrees with AI decision
+        # -------------------------------------------------
+
+        stored_intervention = recovery_action.get("strategy")
+
+        if stored_intervention != recommended_intervention:
+            log_audit_event(
+                event_type="recovery_execution_blocked",
+                payment_id=payment_id,
+                decision=policy_decision,
+                intervention=recommended_intervention,
+                status="blocked",
+                reason=(
+                    "Stored recovery recommendation no longer "
+                    "matches the current ML optimizer decision"
+                ),
+                metadata={
+                    "recovery_action_id": recovery_action["id"],
+                    "stored_intervention": stored_intervention,
+                    "current_intervention": (
+                        recommended_intervention
+                    ),
+                    "policy": policy,
+                },
+            )
+
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        "Recovery recommendation is stale. "
+                        "Run recovery analysis again before execution."
+                    ),
+                    "stored_intervention": stored_intervention,
+                    "current_intervention": (
+                        recommended_intervention
+                    ),
+                },
+            )
+
+        # -------------------------------------------------
+        # 11. Governance gate
+        # -------------------------------------------------
+
+        if policy_decision not in {
+            "AUTO_EXECUTE",
+            "AUTO",
+        }:
+            log_audit_event(
+                event_type="recovery_execution_blocked",
+                payment_id=payment_id,
+                decision=policy_decision,
+                intervention=recommended_intervention,
+                status="blocked",
+                reason=(
+                    "Recovery execution blocked by policy "
+                    "guardrails"
+                ),
+                metadata={
+                    "recovery_action_id": recovery_action["id"],
+                    "policy": policy,
+                    "amount": payment.get("amount"),
+                    "currency": payment.get("currency"),
+                },
+            )
+
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        "Recovery action requires human review "
+                        "and cannot be auto-executed."
+                    ),
+                    "policy_decision": policy_decision,
+                    "policy_reasons": policy.get(
+                        "reasons",
+                        [],
+                    ),
+                },
+            )
+
+        # -------------------------------------------------
+        # 12. Verify supported Razorpay executor
+        # -------------------------------------------------
+
+        if recommended_intervention != (
+            "request_alternative_payment"
+        ):
+            log_audit_event(
+                event_type="recovery_execution_blocked",
+                payment_id=payment_id,
+                decision=policy_decision,
+                intervention=recommended_intervention,
+                status="blocked",
+                reason=(
+                    "No Razorpay sandbox executor is registered "
+                    "for the selected intervention"
+                ),
+                metadata={
+                    "recovery_action_id": recovery_action["id"],
+                    "supported_executor": (
+                        "request_alternative_payment"
+                    ),
+                },
+            )
+
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        "This intervention does not have a "
+                        "Razorpay sandbox executor yet."
+                    ),
+                    "intervention": recommended_intervention,
+                    "supported_executor": (
+                        "request_alternative_payment"
+                    ),
+                },
+            )
+
+        # -------------------------------------------------
+        # 13. Create Razorpay Test Mode Payment Link
+        # -------------------------------------------------
+
+        razorpay_result = create_recovery_payment_link(
+            amount=float(payment["amount"]),
+            customer_id=payment["customer_id"],
+            payment_id=payment["id"],
+            description=(
+                f"AgentReady recovery payment for "
+                f"{payment['customer_id']}"
+            ),
+        )
+
+        print(
+            "RAZORPAY PAYMENT LINK:",
+            razorpay_result,
+        )
+
+        # -------------------------------------------------
+        # 14. Persist provider execution
+        # -------------------------------------------------
+
+        update_response = (
+            supabase
+            .table("recovery_actions")
+            .update({
+                "provider": "razorpay",
+                "provider_reference": razorpay_result.get(
+                    "payment_link_id"
+                ),
+                "provider_url": razorpay_result.get(
+                    "short_url"
+                ),
+                "provider_status": razorpay_result.get(
+                    "status"
+                ),
+            })
+            .eq("id", recovery_action["id"])
+            .execute()
+        )
+
+        if not update_response.data:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Razorpay Payment Link was created but "
+                    "recovery action could not be updated."
+                ),
+            )
+
+        saved_action = update_response.data[0]
+
+        print(
+            "UPDATED RECOVERY ACTION:",
+            saved_action,
+        )
+
+        # -------------------------------------------------
+        # 15. Create governed recovery attempt
+        # -------------------------------------------------
+
+        next_attempt_number = len(completed_attempts) + 1
+
+        attempt = create_recovery_attempt(
+            payment_id=payment_id,
+            attempt_number=next_attempt_number,
+            intervention=recommended_intervention,
+            recovery_action_id=recovery_action["id"],
+        )
+
+        print(
+            "RECOVERY ATTEMPT CREATED:",
+            attempt,
+        )
+
+        # -------------------------------------------------
+        # 16. Audit successful sandbox execution
+        # -------------------------------------------------
+
+        log_audit_event(
+            event_type="razorpay_recovery_execution",
+            payment_id=payment_id,
+            decision=policy_decision,
+            intervention=recommended_intervention,
+            status=razorpay_result.get("status"),
+            reason=(
+                "Razorpay Test Mode recovery Payment Link "
+                "created under AgentReady policy governance"
+            ),
+            metadata={
+                "recovery_action_id": recovery_action["id"],
+                "attempt_id": attempt.get("id"),
+                "attempt_number": attempt.get(
+                    "attempt_number"
+                ),
+                "provider": "razorpay",
+                "provider_reference": razorpay_result.get(
+                    "payment_link_id"
+                ),
+                "provider_status": razorpay_result.get(
+                    "status"
+                ),
+                "amount": payment.get("amount"),
+                "currency": payment.get("currency"),
+                "customer_id": payment.get("customer_id"),
+            },
+        )
+
+        print("=============================================")
+
+        return {
+            "success": True,
+            "payment_id": payment_id,
+            "recovery_action_id": recovery_action["id"],
+            "decision": policy_decision,
+            "intervention": recommended_intervention,
+            "provider": "razorpay",
+            "provider_reference": razorpay_result.get(
+                "payment_link_id"
+            ),
+            "provider_url": razorpay_result.get(
+                "short_url"
+            ),
+            "provider_status": razorpay_result.get(
+                "status"
+            ),
+            "amount": razorpay_result.get("amount"),
+            "currency": razorpay_result.get("currency"),
+            "attempt": attempt,
+            "already_executed": False,
+            "message": (
+                "Razorpay Test Mode recovery Payment Link "
+                "created successfully."
+            ),
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        print("========== RAZORPAY EXECUTION ERROR ==========")
+        print("ERROR TYPE:", type(exc).__name__)
+        print("ERROR:", repr(exc))
+        print("===============================================")
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(exc),
+        ) from exc
+
+
+# =========================================================
+# RECOVERY WORKFLOW
+# =========================================================
+
+@app.post("/payments/{payment_id}/recovery-workflow")
+def start_recovery_workflow(payment_id: str):
+    try:
+        print("========== RECOVERY WORKFLOW ==========")
+        print("PAYMENT ID:", repr(payment_id))
+
+        payment_response = (
+            supabase
+            .table("payments")
+            .select("*")
+            .eq("id", payment_id)
+            .limit(1)
+            .execute()
+        )
+
+        payments = payment_response.data or []
+
+        if not payments:
+            raise HTTPException(
+                status_code=404,
+                detail="Payment not found",
+            )
+
+        payment = payments[0]
+
+        print("PAYMENT FOUND:", payment)
 
         previous_attempts = get_recovery_attempts(payment_id)
 
         print("PREVIOUS ATTEMPTS:", previous_attempts)
 
-        # -------------------------------------------------
-        # 3. Apply stopping rules
-        # -------------------------------------------------
-
         workflow = get_next_intervention(previous_attempts)
 
         print("WORKFLOW DECISION:", workflow)
-
-        # -------------------------------------------------
-        # 4. Audit workflow decision
-        # -------------------------------------------------
 
         log_audit_event(
             event_type="recovery_workflow_decision",
@@ -680,17 +1214,10 @@ def start_recovery_workflow(payment_id: str):
             },
         )
 
-        # -------------------------------------------------
-        # 5. If workflow is not continuing,
-        #    do not create another attempt.
-        # -------------------------------------------------
-
         if workflow["decision"] != "CONTINUE":
-
             existing_attempt = None
 
             if workflow["decision"] == "PENDING":
-
                 pending_attempts = [
                     attempt
                     for attempt in previous_attempts
@@ -711,10 +1238,6 @@ def start_recovery_workflow(payment_id: str):
                 "attempt": existing_attempt,
             }
 
-        # -------------------------------------------------
-        # 6. Create next recovery attempt
-        # -------------------------------------------------
-
         attempt = create_recovery_attempt(
             payment_id=payment_id,
             attempt_number=workflow["attempt_number"],
@@ -722,10 +1245,6 @@ def start_recovery_workflow(payment_id: str):
         )
 
         print("CREATED ATTEMPT:", attempt)
-
-        # -------------------------------------------------
-        # 7. Audit created recovery attempt
-        # -------------------------------------------------
 
         log_audit_event(
             event_type="recovery_attempt_created",
@@ -767,9 +1286,9 @@ def start_recovery_workflow(payment_id: str):
         ) from exc
 
 
-# ---------------------------------------------------------
-# Complete Recovery Attempt
-# ---------------------------------------------------------
+# =========================================================
+# COMPLETE RECOVERY ATTEMPT
+# =========================================================
 
 @app.patch("/recovery-attempts/{attempt_id}")
 def complete_recovery_attempt(
@@ -781,10 +1300,6 @@ def complete_recovery_attempt(
         print("ATTEMPT ID:", repr(attempt_id))
         print("STATUS:", request.status)
 
-        # -------------------------------------------------
-        # 1. Update the attempt in Supabase
-        # -------------------------------------------------
-
         updated_attempt = update_recovery_attempt(
             attempt_id=attempt_id,
             status=request.status,
@@ -793,23 +1308,15 @@ def complete_recovery_attempt(
 
         print("UPDATED ATTEMPT:", updated_attempt)
 
-        # -------------------------------------------------
-        # 2. Audit recovery outcome
-        # -------------------------------------------------
-
         outcome_payment_id = updated_attempt.get("payment_id")
-
         outcome_intervention = updated_attempt.get("intervention")
-
-        outcome_reason = request.failure_reason
 
         if request.status == "success":
             outcome_reason = (
                 request.failure_reason
                 or "Recovery attempt marked successful"
             )
-
-        elif request.status == "failed":
+        else:
             outcome_reason = (
                 request.failure_reason
                 or "Recovery attempt marked failed"
@@ -861,9 +1368,9 @@ def complete_recovery_attempt(
         ) from exc
 
 
-# ---------------------------------------------------------
-# Recovery Attempt History
-# ---------------------------------------------------------
+# =========================================================
+# RECOVERY ATTEMPT HISTORY
+# =========================================================
 
 @app.get("/payments/{payment_id}/recovery-attempts")
 def get_payment_recovery_attempts(payment_id: str):
@@ -897,9 +1404,9 @@ def get_payment_recovery_attempts(payment_id: str):
         ) from exc
 
 
-# ---------------------------------------------------------
-# Batch Recovery Intelligence
-# ---------------------------------------------------------
+# =========================================================
+# BATCH RECOVERY INTELLIGENCE
+# =========================================================
 
 @app.post("/recovery/batch")
 def run_batch_recovery():
@@ -921,35 +1428,26 @@ def run_batch_recovery():
         result = analyze_batch_recovery()
 
         print("PAYMENT COUNT:", result["payment_count"])
-
         print(
             "REVENUE AT RISK:",
             result["total_revenue_at_risk"],
         )
-
         print(
             "EXPECTED RECOVERY:",
             result["total_expected_recovery"],
         )
-
         print(
             "RECOVERY OPPORTUNITY:",
             result["recovery_opportunity_percent"],
         )
-
         print(
             "AUTO RECOVERY COUNT:",
             result["auto_recovery_count"],
         )
-
         print(
             "HUMAN REVIEW COUNT:",
             result["human_review_count"],
         )
-
-        # -------------------------------------------------
-        # Audit batch recovery analysis
-        # -------------------------------------------------
 
         log_audit_event(
             event_type="batch_recovery_analysis",
@@ -998,9 +1496,9 @@ def run_batch_recovery():
         ) from exc
 
 
-# ---------------------------------------------------------
-# Conversational Recovery Agent
-# ---------------------------------------------------------
+# =========================================================
+# CONVERSATIONAL RECOVERY AGENT
+# =========================================================
 
 @app.post("/agent/query")
 def query_recovery_agent(request: AgentQueryRequest):
@@ -1051,18 +1549,18 @@ def query_recovery_agent(request: AgentQueryRequest):
         ) from exc
 
 
-# ---------------------------------------------------------
-# ML Evaluation Evidence
-# ---------------------------------------------------------
+# =========================================================
+# ML EVALUATION EVIDENCE
+# =========================================================
 
 @app.get("/ml/evaluation")
 def get_ml_evaluation():
     """
     Return evidence behind AgentReady's ML recovery decisions.
 
-    Data is loaded from the evaluation artifacts generated
-    during model development rather than hardcoded into the
-    frontend.
+    Data is loaded from evaluation artifacts generated
+    during model development rather than hardcoded into
+    the frontend.
     """
 
     try:
@@ -1114,9 +1612,9 @@ def get_ml_evaluation():
         ) from exc
 
 
-# ---------------------------------------------------------
-# Recovery Action History
-# ---------------------------------------------------------
+# =========================================================
+# RECOVERY ACTION HISTORY
+# =========================================================
 
 @app.get("/recovery-actions")
 def get_recovery_actions():
@@ -1146,9 +1644,9 @@ def get_recovery_actions():
         ) from exc
 
 
-# ---------------------------------------------------------
-# Audit Trail
-# ---------------------------------------------------------
+# =========================================================
+# AUDIT TRAIL
+# =========================================================
 
 @app.get("/audit-events")
 def get_all_audit_events():
@@ -1182,9 +1680,9 @@ def get_all_audit_events():
         ) from exc
 
 
-# ---------------------------------------------------------
-# Payment-specific Audit Trail
-# ---------------------------------------------------------
+# =========================================================
+# PAYMENT-SPECIFIC AUDIT TRAIL
+# =========================================================
 
 @app.get("/payments/{payment_id}/audit-events")
 def get_payment_audit_events(payment_id: str):
