@@ -39,6 +39,26 @@ type RecoveryAction = {
   created_at: string;
 };
 
+type RecoveryAttempt = {
+  id: string;
+  payment_id: string;
+  attempt_number: number;
+  intervention: string;
+  status: string;
+  failure_reason?: string | null;
+  recovery_action_id?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+};
+
+type RecoveryWorkflow = {
+  decision: string;
+  reason: string;
+  next_intervention?: string | null;
+  attempt_number?: number;
+  attempt?: RecoveryAttempt | null;
+};
+
 type BatchResult = {
   payment_id: string;
   customer_id: string;
@@ -85,6 +105,14 @@ export default function Home() {
 
   const [error, setError] = useState<string | null>(null);
   const [lastBatchRun, setLastBatchRun] = useState<Date | null>(null);
+
+  const [selectedRecoveryPayment, setSelectedRecoveryPayment] =
+    useState<string>("");
+  const [recoveryAttempts, setRecoveryAttempts] = useState<RecoveryAttempt[]>([]);
+  const [workflowDecision, setWorkflowDecision] =
+    useState<RecoveryWorkflow | null>(null);
+  const [loadingWorkflow, setLoadingWorkflow] = useState(false);
+  const [loadingAttempts, setLoadingAttempts] = useState(false);
 
   async function loadPayments() {
     try {
@@ -222,10 +250,109 @@ export default function Home() {
     }
   }
 
+  async function loadRecoveryAttempts(paymentId: string) {
+    if (!paymentId) return;
+
+    try {
+      setLoadingAttempts(true);
+      const response = await fetch(
+        `${API_URL}/payments/${paymentId}/recovery-attempts`
+      );
+
+      if (!response.ok) {
+        throw new Error("Unable to load recovery attempts");
+      }
+
+      const data = await response.json();
+      setRecoveryAttempts(data.attempts || []);
+    } catch (err) {
+      console.error(err);
+      setError("Unable to load recovery attempt history.");
+    } finally {
+      setLoadingAttempts(false);
+    }
+  }
+
+  async function runRecoveryWorkflow(paymentId: string) {
+    if (!paymentId) return;
+
+    try {
+      setError(null);
+      setLoadingWorkflow(true);
+
+      const response = await fetch(
+        `${API_URL}/payments/${paymentId}/recovery-workflow`,
+        { method: "POST" }
+      );
+
+      if (!response.ok) {
+        throw new Error("Unable to run recovery workflow");
+      }
+
+      const data = await response.json();
+      const workflow = data.workflow || data;
+
+      setWorkflowDecision(workflow);
+      await loadRecoveryAttempts(paymentId);
+    } catch (err) {
+      console.error(err);
+      setError("Unable to run the recovery workflow.");
+    } finally {
+      setLoadingWorkflow(false);
+    }
+  }
+
+  async function updateRecoveryAttempt(
+    attemptId: string,
+    status: "success" | "failed"
+  ) {
+    try {
+      setError(null);
+
+      const response = await fetch(
+        `${API_URL}/recovery-attempts/${attemptId}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            status,
+            ...(status === "failed"
+              ? { failure_reason: "demo_intervention_failed" }
+              : {}),
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Unable to update recovery attempt");
+      }
+
+      if (selectedRecoveryPayment) {
+        await loadRecoveryAttempts(selectedRecoveryPayment);
+      }
+    } catch (err) {
+      console.error(err);
+      setError("Unable to update the recovery attempt.");
+    }
+  }
+
   useEffect(() => {
     loadPayments();
     loadRecoveryHistory();
   }, []);
+
+  useEffect(() => {
+    if (!selectedRecoveryPayment && payments.length > 0) {
+      setSelectedRecoveryPayment(payments[0].id);
+    }
+  }, [payments, selectedRecoveryPayment]);
+
+  useEffect(() => {
+    if (selectedRecoveryPayment) {
+      loadRecoveryAttempts(selectedRecoveryPayment);
+      setWorkflowDecision(null);
+    }
+  }, [selectedRecoveryPayment]);
 
   const totalFailedPayments = payments.length;
 
@@ -584,6 +711,139 @@ export default function Home() {
                 title="Decide"
                 description="Auto / human"
               />
+            </div>
+          </section>
+        )}
+
+        {/* GOVERNED RECOVERY WORKFLOW */}
+        {batchData && payments.length > 0 && (
+          <section className="recoveryControlCard">
+            <div className="sectionHeader">
+              <div>
+                <span className="eyebrow">RECOVERY CONTROL PLANE</span>
+                <h2>Execute the governed recovery loop</h2>
+                <p>
+                  Select a failed payment, create a bounded recovery attempt,
+                  record its test outcome, and let the stopping rule decide what happens next.
+                </p>
+              </div>
+
+              <span className="workflowBadge">MAX 2 ATTEMPTS</span>
+            </div>
+
+            <div className="controlGrid">
+              <div className="controlPanel">
+                <label className="controlLabel" htmlFor="recovery-payment">
+                  FAILED PAYMENT
+                </label>
+                <select
+                  id="recovery-payment"
+                  className="paymentSelect"
+                  value={selectedRecoveryPayment}
+                  onChange={(event) =>
+                    setSelectedRecoveryPayment(event.target.value)
+                  }
+                >
+                  {payments.map((payment) => (
+                    <option key={payment.id} value={payment.id}>
+                      {payment.customer_id} · ₹{Number(payment.amount).toLocaleString("en-IN")} · {formatStrategy(payment.failure_reason || "unknown")}
+                    </option>
+                  ))}
+                </select>
+
+                <button
+                  className="workflowRunButton"
+                  onClick={() => runRecoveryWorkflow(selectedRecoveryPayment)}
+                  disabled={loadingWorkflow || !selectedRecoveryPayment}
+                >
+                  {loadingWorkflow ? "Evaluating workflow..." : "Start / Continue Recovery"}
+                  <span>→</span>
+                </button>
+
+                <div className="controlNote">
+                  <span>✓</span>
+                  Backend-enforced stopping rule · no attempt 3
+                </div>
+              </div>
+
+              <div className="workflowDecisionPanel">
+                <div className="miniLabel">LATEST WORKFLOW DECISION</div>
+                {workflowDecision ? (
+                  <>
+                    <div className={`workflowDecision ${workflowDecision.decision.toLowerCase()}`}>
+                      {formatStatus(workflowDecision.decision)}
+                    </div>
+                    <p className="workflowReason">{workflowDecision.reason}</p>
+                    <div className="workflowDecisionMeta">
+                      <span>Attempt {workflowDecision.attempt_number ?? "—"}</span>
+                      <span>
+                        Next: {workflowDecision.next_intervention
+                          ? formatStrategy(workflowDecision.next_intervention)
+                          : "STOP / HUMAN REVIEW"}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="workflowEmpty">
+                    Run the workflow to see the agent decision and stopping rule.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="attemptHeader">
+              <div>
+                <strong>Recovery attempt ledger</strong>
+                <span>Persistent state from Supabase</span>
+              </div>
+              <span className="countBadge">{recoveryAttempts.length} attempts</span>
+            </div>
+
+            {loadingAttempts ? (
+              <LoadingState text="Loading attempt history..." />
+            ) : recoveryAttempts.length === 0 ? (
+              <div className="attemptEmpty">No recovery attempts recorded for this payment.</div>
+            ) : (
+              <div className="attemptTimeline">
+                {recoveryAttempts.map((attempt) => (
+                  <div className="attemptRow" key={attempt.id}>
+                    <div className="attemptNumber">{attempt.attempt_number}</div>
+                    <div className="attemptMain">
+                      <strong>{formatStrategy(attempt.intervention)}</strong>
+                      <small>
+                        {new Date(attempt.created_at).toLocaleString("en-IN")}
+                        {attempt.failure_reason ? ` · ${formatStrategy(attempt.failure_reason)}` : ""}
+                      </small>
+                    </div>
+                    <span className={`attemptStatus ${attempt.status.toLowerCase()}`}>
+                      {formatStatus(attempt.status)}
+                    </span>
+                    {attempt.status === "pending" && (
+                      <div className="attemptActions">
+                        <button
+                          className="attemptSuccessButton"
+                          onClick={() => updateRecoveryAttempt(attempt.id, "success")}
+                        >
+                          Record Success
+                        </button>
+                        <button
+                          className="attemptFailButton"
+                          onClick={() => updateRecoveryAttempt(attempt.id, "failed")}
+                        >
+                          Record Failure
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="demoGuardrail">
+              <span>DEMO SAFETY BOUNDARY</span>
+              <p>
+                Outcome buttons update the test workflow state only. AgentReady does not claim a real payment was executed or recovered.
+              </p>
             </div>
           </section>
         )}
@@ -1930,6 +2190,302 @@ export default function Home() {
             );
         }
 
+        /* GOVERNED RECOVERY CONTROL */
+
+        .recoveryControlCard {
+          margin-bottom: 20px;
+          padding: 22px 24px;
+          border: 1px solid #dfe5ec;
+          border-radius: 14px;
+          background: rgba(255, 255, 255, 0.97);
+          box-shadow: 0 3px 13px rgba(15, 23, 42, 0.035);
+        }
+
+        .controlGrid {
+          display: grid;
+          grid-template-columns: 1.1fr 1fr;
+          gap: 12px;
+          margin-top: 20px;
+        }
+
+        .controlPanel,
+        .workflowDecisionPanel {
+          padding: 17px;
+          border: 1px solid #e5e7eb;
+          border-radius: 11px;
+          background: #f8fafc;
+        }
+
+        .controlLabel,
+        .miniLabel {
+          color: #64748b;
+          font-size: 7px;
+          font-weight: 900;
+          letter-spacing: 1px;
+        }
+
+        .paymentSelect {
+          width: 100%;
+          margin-top: 9px;
+          padding: 11px 12px;
+          border: 1px solid #dbe2ea;
+          border-radius: 8px;
+          outline: none;
+          color: #172033;
+          background: white;
+          font-size: 9px;
+          font-weight: 700;
+        }
+
+        .workflowRunButton {
+          width: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-top: 10px;
+          padding: 11px 13px;
+          border: none;
+          border-radius: 8px;
+          color: white;
+          background: linear-gradient(135deg, #111827, #4338ca);
+          cursor: pointer;
+          font-size: 9px;
+          font-weight: 900;
+        }
+
+        .workflowRunButton:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
+        }
+
+        .controlNote {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin-top: 10px;
+          color: #64748b;
+          font-size: 7px;
+        }
+
+        .controlNote span {
+          color: #059669;
+          font-weight: 900;
+        }
+
+        .workflowDecisionPanel {
+          background: linear-gradient(145deg, #f7f8ff, #ffffff);
+        }
+
+        .workflowDecision {
+          display: inline-flex;
+          margin-top: 10px;
+          padding: 7px 9px;
+          border-radius: 7px;
+          font-size: 8px;
+          font-weight: 900;
+          letter-spacing: 0.6px;
+        }
+
+        .workflowDecision.pending,
+        .workflowDecision.continue {
+          color: #92400e;
+          background: #fef3c7;
+        }
+
+        .workflowDecision.human_review,
+        .workflowDecision.stop {
+          color: #991b1b;
+          background: #fee2e2;
+        }
+
+        .workflowDecision.success {
+          color: #166534;
+          background: #dcfce7;
+        }
+
+        .workflowReason {
+          margin: 10px 0 8px;
+          color: #475569;
+          font-size: 9px;
+          line-height: 1.55;
+        }
+
+        .workflowDecisionMeta {
+          display: flex;
+          gap: 7px;
+          flex-wrap: wrap;
+        }
+
+        .workflowDecisionMeta span {
+          padding: 5px 7px;
+          border: 1px solid #e2e8f0;
+          border-radius: 6px;
+          color: #64748b;
+          background: white;
+          font-size: 7px;
+          font-weight: 800;
+        }
+
+        .workflowEmpty {
+          margin-top: 14px;
+          color: #94a3b8;
+          font-size: 9px;
+          line-height: 1.5;
+        }
+
+        .attemptHeader {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 15px;
+          margin-top: 20px;
+          margin-bottom: 10px;
+        }
+
+        .attemptHeader strong,
+        .attemptHeader span {
+          display: block;
+        }
+
+        .attemptHeader strong {
+          color: #111827;
+          font-size: 10px;
+        }
+
+        .attemptHeader > div > span {
+          margin-top: 3px;
+          color: #94a3b8;
+          font-size: 7px;
+        }
+
+        .attemptTimeline {
+          display: grid;
+          gap: 7px;
+        }
+
+        .attemptRow {
+          display: grid;
+          grid-template-columns: 31px 1fr auto auto;
+          align-items: center;
+          gap: 10px;
+          padding: 10px;
+          border: 1px solid #e5e7eb;
+          border-radius: 9px;
+          background: white;
+        }
+
+        .attemptNumber {
+          width: 27px;
+          height: 27px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 7px;
+          color: white;
+          background: #111827;
+          font-size: 8px;
+          font-weight: 900;
+        }
+
+        .attemptMain strong,
+        .attemptMain small {
+          display: block;
+        }
+
+        .attemptMain strong {
+          color: #1e293b;
+          font-size: 9px;
+        }
+
+        .attemptMain small {
+          margin-top: 3px;
+          color: #94a3b8;
+          font-size: 7px;
+        }
+
+        .attemptStatus {
+          padding: 5px 7px;
+          border-radius: 6px;
+          font-size: 7px;
+          font-weight: 900;
+        }
+
+        .attemptStatus.pending {
+          color: #92400e;
+          background: #fef3c7;
+        }
+
+        .attemptStatus.failed {
+          color: #991b1b;
+          background: #fee2e2;
+        }
+
+        .attemptStatus.success {
+          color: #166534;
+          background: #dcfce7;
+        }
+
+        .attemptActions {
+          display: flex;
+          gap: 5px;
+        }
+
+        .attemptSuccessButton,
+        .attemptFailButton {
+          padding: 6px 8px;
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 7px;
+          font-weight: 900;
+        }
+
+        .attemptSuccessButton {
+          border: 1px solid #bbf7d0;
+          color: #166534;
+          background: #f0fdf4;
+        }
+
+        .attemptFailButton {
+          border: 1px solid #fecaca;
+          color: #991b1b;
+          background: #fff7f7;
+        }
+
+        .attemptEmpty {
+          padding: 17px;
+          border: 1px dashed #cbd5e1;
+          border-radius: 9px;
+          color: #94a3b8;
+          background: #f8fafc;
+          font-size: 8px;
+        }
+
+        .demoGuardrail {
+          display: flex;
+          gap: 10px;
+          align-items: center;
+          margin-top: 12px;
+          padding: 9px 10px;
+          border: 1px solid #e2e8f0;
+          border-radius: 8px;
+          background: #f8fafc;
+        }
+
+        .demoGuardrail span {
+          color: #6366f1;
+          font-size: 6px;
+          font-weight: 900;
+          letter-spacing: 0.8px;
+          white-space: nowrap;
+        }
+
+        .demoGuardrail p {
+          margin: 0;
+          color: #64748b;
+          font-size: 7px;
+          line-height: 1.5;
+        }
+
         /* METRICS */
 
         .metricsGrid {
@@ -2785,7 +3341,8 @@ export default function Home() {
           }
 
           .metricsGrid,
-          .analysisGrid {
+          .analysisGrid,
+          .controlGrid {
             grid-template-columns: 1fr;
           }
 
@@ -2804,6 +3361,19 @@ export default function Home() {
           .explainFooter {
             flex-direction: column;
             gap: 6px;
+          }
+
+          .attemptRow {
+            grid-template-columns: 31px 1fr auto;
+          }
+
+          .attemptActions {
+            grid-column: 2 / -1;
+          }
+
+          .demoGuardrail {
+            align-items: flex-start;
+            flex-direction: column;
           }
         }
       `}</style>
