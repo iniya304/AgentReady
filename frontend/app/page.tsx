@@ -58,7 +58,18 @@ type RecoveryWorkflow = {
   attempt_number?: number;
   attempt?: RecoveryAttempt | null;
 };
-
+type AuditEvent = {
+  id: string;
+  payment_id: string | null;
+  event_type: string;
+  actor: string;
+  decision: string | null;
+  intervention: string | null;
+  status: string | null;
+  reason: string | null;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+};
 type BatchResult = {
   payment_id: string;
   customer_id: string;
@@ -114,6 +125,9 @@ export default function Home() {
   const [loadingWorkflow, setLoadingWorkflow] = useState(false);
   const [loadingAttempts, setLoadingAttempts] = useState(false);
 
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [loadingAudit, setLoadingAudit] = useState(false);
+
   async function loadPayments() {
     try {
       setLoadingPayments(true);
@@ -157,7 +171,53 @@ export default function Home() {
       setLoadingHistory(false);
     }
   }
+    async function loadRecoveryHistory() {
+    try {
+      setLoadingHistory(true);
 
+      const response = await fetch(
+        `${API_URL}/recovery-actions`
+      );
+
+      if (!response.ok) {
+        throw new Error("Unable to load recovery history");
+      }
+
+      const data = await response.json();
+
+      setRecoveryActions(data.recovery_actions || []);
+    } catch (err) {
+      console.error(err);
+      setError("Unable to load recovery history.");
+    } finally {
+      setLoadingHistory(false);
+    }
+  }
+
+  async function loadAuditEvents(paymentId?: string) {
+    try {
+      setLoadingAudit(true);
+
+      const endpoint = paymentId
+        ? `${API_URL}/payments/${paymentId}/audit-events`
+        : `${API_URL}/audit-events`;
+
+      const response = await fetch(endpoint);
+
+      if (!response.ok) {
+        throw new Error("Unable to load audit events");
+      }
+
+      const data = await response.json();
+
+      setAuditEvents(data.events || []);
+    } catch (err) {
+      console.error(err);
+      setError("Unable to load audit trail.");
+    } finally {
+      setLoadingAudit(false);
+    }
+  }
   async function runBatchRecovery() {
     try {
       setError(null);
@@ -175,6 +235,7 @@ export default function Home() {
       }
 
       const data = await response.json();
+      console.log("BATCH DATA:", data);
 
       setBatchData(data.data);
       setLastBatchRun(new Date());
@@ -337,9 +398,9 @@ export default function Home() {
   }
 
   useEffect(() => {
-    loadPayments();
-    loadRecoveryHistory();
-  }, []);
+  loadPayments();
+  loadRecoveryHistory();
+}, []);
 
   useEffect(() => {
     if (!selectedRecoveryPayment && payments.length > 0) {
@@ -350,6 +411,7 @@ export default function Home() {
   useEffect(() => {
     if (selectedRecoveryPayment) {
       loadRecoveryAttempts(selectedRecoveryPayment);
+      loadAuditEvents(selectedRecoveryPayment);
       setWorkflowDecision(null);
     }
   }, [selectedRecoveryPayment]);
