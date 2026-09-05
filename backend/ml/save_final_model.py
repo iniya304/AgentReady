@@ -264,7 +264,7 @@ print(f"\nModel path:")
 print(MODEL_PATH)
 
 print("\nModel configuration:")
-print("Algorithm : Logistic Regression")
+print("Algorithm : Logistic Regression")            
 print("C         : 0.03")
 print(f"Features  : {X.shape[1]}")
 

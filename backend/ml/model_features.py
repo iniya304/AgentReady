@@ -202,4 +202,3 @@ def build_features(
     )
 
     return df
-
