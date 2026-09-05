@@ -171,29 +171,6 @@ export default function Home() {
       setLoadingHistory(false);
     }
   }
-    async function loadRecoveryHistory() {
-    try {
-      setLoadingHistory(true);
-
-      const response = await fetch(
-        `${API_URL}/recovery-actions`
-      );
-
-      if (!response.ok) {
-        throw new Error("Unable to load recovery history");
-      }
-
-      const data = await response.json();
-
-      setRecoveryActions(data.recovery_actions || []);
-    } catch (err) {
-      console.error(err);
-      setError("Unable to load recovery history.");
-    } finally {
-      setLoadingHistory(false);
-    }
-  }
-
   async function loadAuditEvents(paymentId?: string) {
     try {
       setLoadingAudit(true);
@@ -355,6 +332,7 @@ export default function Home() {
 
       setWorkflowDecision(workflow);
       await loadRecoveryAttempts(paymentId);
+      await loadAuditEvents(paymentId);
     } catch (err) {
       console.error(err);
       setError("Unable to run the recovery workflow.");
@@ -390,6 +368,7 @@ export default function Home() {
 
       if (selectedRecoveryPayment) {
         await loadRecoveryAttempts(selectedRecoveryPayment);
+        await loadAuditEvents(selectedRecoveryPayment);
       }
     } catch (err) {
       console.error(err);
@@ -909,7 +888,68 @@ export default function Home() {
             </div>
           </section>
         )}
+        {/* AUDIT TRAIL */}
+{selectedRecoveryPayment && (
+    <section className="card">
+    <div className="sectionHeader">
+      <div>
+        <span className="eyebrow">AUDIT TRAIL</span>
+        <h2>Recovery decision history</h2>
+        <p>
+          Every recovery decision and workflow outcome is recorded for traceability.
+        </p>
+      </div>
 
+      <span className="workflowBadge">
+        {auditEvents.length} EVENTS
+      </span>
+    </div>
+
+    {auditEvents.length === 0 ? (
+      <div className="emptyState">
+        No audit events recorded for this payment yet.
+      </div>
+    ) : (
+      <div className="tableWrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Event</th>
+              <th>Decision</th>
+              <th>Intervention</th>
+              <th>Status</th>
+              <th>Reason</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {auditEvents.map((event) => (
+              <tr key={event.id}>
+                <td>
+                  {event.created_at
+                    ? new Date(event.created_at).toLocaleString()
+                    : "—"}
+                </td>
+
+                <td>
+                  {event.event_type
+                    ?.replaceAll("_", " ")
+                    .replace(/\b\w/g, (char: string) => char.toUpperCase())}
+                </td>
+
+                <td>{event.decision || "—"}</td>
+                <td>{event.intervention || "—"}</td>
+                <td>{event.status || "—"}</td>
+                <td>{event.reason || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </section>
+)}
         {/* KPI CARDS */}
         <section className="metricsGrid">
           <MetricCard
