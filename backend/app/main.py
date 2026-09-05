@@ -17,6 +17,8 @@ from ml.recovery_attempt_service import (
 )
 from ml.batch_recovery_service import analyze_batch_recovery
 from ml.audit_service import log_audit_event, get_audit_events
+from ml.evaluation_service import get_model_evaluation
+from ml.recovery_agent import answer_recovery_question
 
 
 app = FastAPI(title="AgentReady")
@@ -53,6 +55,10 @@ class PaymentCreate(BaseModel):
 
 class PredictionRequest(BaseModel):
     intervention: str = "retry_later"
+
+
+class AgentQueryRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=500)
 
 
 class RecoveryAttemptUpdate(BaseModel):
@@ -361,7 +367,10 @@ def optimize_payment_recovery(payment_id: str):
             decision=policy_decision,
             intervention=selected_intervention,
             status="completed",
-            reason="Candidate recovery interventions evaluated and policy guardrails applied",
+            reason=(
+                "Candidate recovery interventions evaluated "
+                "and policy guardrails applied"
+            ),
             metadata={
                 "optimization": optimization,
                 "policy": policy,
@@ -480,7 +489,10 @@ def recover_payment(payment_id: str):
                 payment_id=payment["id"],
                 intervention=existing_action["strategy"],
                 status=existing_action["status"],
-                reason="Existing recovery recommendation reused to prevent duplicate actions",
+                reason=(
+                    "Existing recovery recommendation reused "
+                    "to prevent duplicate actions"
+                ),
                 metadata={
                     "recovery_action_id": existing_action["id"],
                     "priority": existing_action["priority"],
@@ -811,9 +823,13 @@ def complete_recovery_attempt(
             reason=outcome_reason,
             metadata={
                 "attempt_id": attempt_id,
-                "attempt_number": updated_attempt.get("attempt_number"),
+                "attempt_number": updated_attempt.get(
+                    "attempt_number"
+                ),
                 "failure_reason": request.failure_reason,
-                "completed_at": updated_attempt.get("completed_at"),
+                "completed_at": updated_attempt.get(
+                    "completed_at"
+                ),
             },
         )
 
@@ -868,7 +884,9 @@ def get_payment_recovery_attempts(payment_id: str):
         }
 
     except Exception as exc:
-        print("========== RECOVERY ATTEMPT HISTORY ERROR ==========")
+        print(
+            "========== RECOVERY ATTEMPT HISTORY ERROR =========="
+        )
         print("ERROR TYPE:", type(exc).__name__)
         print("ERROR:", repr(exc))
         print("=====================================================")
@@ -937,7 +955,10 @@ def run_batch_recovery():
             event_type="batch_recovery_analysis",
             actor="AgentReady",
             status="completed",
-            reason="Portfolio-wide recovery opportunity analysis completed",
+            reason=(
+                "Portfolio-wide recovery opportunity "
+                "analysis completed"
+            ),
             metadata={
                 "payment_count": result.get("payment_count"),
                 "total_revenue_at_risk": result.get(
@@ -974,6 +995,122 @@ def run_batch_recovery():
         raise HTTPException(
             status_code=500,
             detail=str(exc),
+        ) from exc
+
+
+# ---------------------------------------------------------
+# Conversational Recovery Agent
+# ---------------------------------------------------------
+
+@app.post("/agent/query")
+def query_recovery_agent(request: AgentQueryRequest):
+    """
+    Answer a merchant recovery question using AgentReady's
+    live recovery intelligence pipeline.
+
+    The agent is grounded in:
+    - Supabase payment/customer data
+    - trained recovery probability model
+    - intervention optimizer
+    - policy guardrails
+    - recovery workflow logic
+    """
+
+    try:
+        print("========== RECOVERY AGENT QUERY ==========")
+        print("QUESTION:", request.question)
+
+        result = answer_recovery_question(request.question)
+
+        print("INTENT:", result.get("intent"))
+        print("==========================================")
+
+        return {
+            "success": True,
+            "question": request.question,
+            "result": result,
+        }
+
+    except ValueError as exc:
+        print("RECOVERY AGENT VALIDATION ERROR:", repr(exc))
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        print("========== RECOVERY AGENT ERROR ==========")
+        print("ERROR TYPE:", type(exc).__name__)
+        print("ERROR:", repr(exc))
+        print("==========================================")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to process recovery agent query",
+        ) from exc
+
+
+# ---------------------------------------------------------
+# ML Evaluation Evidence
+# ---------------------------------------------------------
+
+@app.get("/ml/evaluation")
+def get_ml_evaluation():
+    """
+    Return evidence behind AgentReady's ML recovery decisions.
+
+    Data is loaded from the evaluation artifacts generated
+    during model development rather than hardcoded into the
+    frontend.
+    """
+
+    try:
+        print("========== ML EVALUATION ==========")
+
+        result = get_model_evaluation()
+
+        print(
+            "MODEL:",
+            result["model"]["name"],
+        )
+
+        print(
+            "TEST ROC-AUC:",
+            result["final_test"]["roc_auc"],
+        )
+
+        print(
+            "TEST PR-AUC:",
+            result["final_test"]["pr_auc"],
+        )
+
+        print(
+            "TEST RECALL:",
+            result["final_test"]["recall"],
+        )
+
+        print("===================================")
+
+        return result
+
+    except FileNotFoundError as exc:
+        print("ML EVALUATION FILE ERROR:", repr(exc))
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        print("========== ML EVALUATION ERROR ==========")
+        print("ERROR TYPE:", type(exc).__name__)
+        print("ERROR:", repr(exc))
+        print("=========================================")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load ML evaluation evidence",
         ) from exc
 
 
